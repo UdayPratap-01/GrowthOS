@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: growthos-postgres
+    environment:
+      POSTGRES_USER: growthos
+      POSTGRES_PASSWORD: growthos
+      POSTGRES_DB: growthos
+    ports:
+      - "5432:5432"
+    volumes:
+      - growthos_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U growthos -d growthos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+    container_name: growthos-api
+    ports:
+      - "8000:8000"
+    environment:
+      DEMO_MODE: "true"
+      API_CORS_ORIGINS: http://localhost:3000
+      DATABASE_URL: postgresql+asyncpg://growthos:growthos@db:5432/growthos
+      DATABASE_URL_SYNC: postgresql://growthos:growthos@db:5432/growthos
+      SECRET_KEY: docker-dev-secret-change-me
+      ENCRYPTION_KEY: change-me-32-byte-fernet-compatible-key!!
+      AI_PROVIDER: mock
+      RATE_LIMIT_PER_MINUTE: "120"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  growthos_pg_data:
