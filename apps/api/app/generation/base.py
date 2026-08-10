@@ -26,12 +26,33 @@ class GenerationResult:
     download_url: str | None = None
 
 
+def _cancel_unsupported(provider: str) -> GenerationResult:
+    return GenerationResult(
+        success=False,
+        status="cancel_unsupported",
+        provider=provider,
+        message="This provider does not support cancelling a submitted generation.",
+        error_code="CANCEL_NOT_SUPPORTED",
+    )
+
+
 class ImageGenerationProvider(ABC):
     name: str
 
     @abstractmethod
     def configured(self) -> bool:
         raise NotImplementedError
+
+    async def cancel(self, provider_job_id: str) -> GenerationResult:
+        """
+        Ask the provider to stop a submitted generation.
+
+        Concrete rather than abstract, and honest by default: most image
+        providers are synchronous and have nothing to cancel. A default that
+        claimed success would let the UI report a cancellation the provider never
+        performed — and still bill for it.
+        """
+        return _cancel_unsupported(self.name)
 
     @abstractmethod
     async def generate_image(
@@ -61,6 +82,16 @@ class VideoGenerationProvider(ABC):
     @abstractmethod
     def configured(self) -> bool:
         raise NotImplementedError
+
+    async def cancel(self, provider_job_id: str) -> GenerationResult:
+        """
+        Cancel a running video generation at the provider.
+
+        Video is where cancelling matters — a long generation that is no longer
+        wanted keeps costing money — so providers that support it override this.
+        The default refuses rather than pretending.
+        """
+        return _cancel_unsupported(self.name)
 
     @abstractmethod
     async def generate_video(

@@ -42,6 +42,13 @@ class Metric:
     INTEGRATION_SYNC = "integration_sync"
     LEAD = "lead"
     CLIENT = "client"
+    # P2-A. Metered separately from AI_REQUEST because they are the units a
+    # customer recognises on an invoice — "12 campaigns generated" rather than
+    # "however many model calls that took".
+    CAMPAIGN_GENERATION = "campaign_generation"
+    STRATEGY_GENERATION = "strategy_generation"
+    COPY_GENERATION = "copy_generation"
+    VARIATION_GENERATION = "variation_generation"
 
     ALL = (
         AI_REQUEST,
@@ -53,6 +60,10 @@ class Metric:
         INTEGRATION_SYNC,
         LEAD,
         CLIENT,
+        CAMPAIGN_GENERATION,
+        STRATEGY_GENERATION,
+        COPY_GENERATION,
+        VARIATION_GENERATION,
     )
 
 

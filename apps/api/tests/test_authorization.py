@@ -293,6 +293,30 @@ EXPENSIVE_ENDPOINTS = [
      MemberRole.member),
     ("job_retry", "POST", f"/api/v1/jobs/{uuid.uuid4()}/retry", None, MemberRole.member),
     ("job_cancel", "POST", f"/api/v1/jobs/{uuid.uuid4()}/cancel", None, MemberRole.member),
+    # P2-A. Generation spends AI and media money, so member and above; approval
+    # authorises a package for launch, so admin and above.
+    ("campaign_generate", "POST", "/api/v1/campaign-generation/generate", {
+        "client_id": "{client_id}", "platform": "meta", "objective": "lead_generation",
+    }, MemberRole.member),
+    ("concept_variations", "POST",
+     f"/api/v1/campaign-generation/concepts/{uuid.uuid4()}/variations", {"count": 1},
+     MemberRole.member),
+    ("concept_regenerate", "POST",
+     f"/api/v1/campaign-generation/concepts/{uuid.uuid4()}/regenerate", {"image_quantity": 1},
+     MemberRole.member),
+    ("concept_archive", "POST",
+     f"/api/v1/campaign-generation/concepts/{uuid.uuid4()}/archive", None, MemberRole.member),
+    ("asset_archive", "POST", f"/api/v1/creative/assets/{uuid.uuid4()}/archive", None,
+     MemberRole.member),
+    ("image_job_cancel", "POST", f"/api/v1/creative/images/jobs/{uuid.uuid4()}/cancel", None,
+     MemberRole.member),
+    ("video_job_cancel", "POST", f"/api/v1/creative/videos/jobs/{uuid.uuid4()}/cancel", None,
+     MemberRole.member),
+    ("campaign_approve", "POST",
+     f"/api/v1/campaign-generation/campaigns/{uuid.uuid4()}/approve", {}, MemberRole.admin),
+    ("campaign_reject", "POST",
+     f"/api/v1/campaign-generation/campaigns/{uuid.uuid4()}/reject", {"reason": "no"},
+     MemberRole.admin),
     # Admin and above: money, publishing, credentials, worker execution.
     ("jobs_process", "POST", "/api/v1/autopilot/jobs/process", None, MemberRole.admin),
     ("integration_sync", "POST", "/api/v1/integrations/meta/sync", None, MemberRole.admin),
@@ -409,11 +433,25 @@ def test_every_sensitive_route_is_gated_server_side():
         ("integrations.py", "/{provider}/sync"),
         ("integrations.py", "/{provider}/sync/async"),
         ("auth.py", "/organization/mode"),
+        # P2-A creative and campaign engine: AI spend, media spend, approval.
+        ("campaign_generation.py", "/generate"),
+        ("campaign_generation.py", "/campaigns/{campaign_id}/approve"),
+        ("campaign_generation.py", "/campaigns/{campaign_id}/reject"),
+        ("campaign_generation.py", "/concepts/{concept_id}/variations"),
+        ("campaign_generation.py", "/concepts/{concept_id}/regenerate"),
+        ("campaign_generation.py", "/concepts/{concept_id}/archive"),
+        ("creative.py", "/images/generate"),
+        ("creative.py", "/videos/generate"),
+        ("creative.py", "/images/jobs/{job_id}/cancel"),
+        ("creative.py", "/videos/jobs/{job_id}/cancel"),
+        ("creative.py", "/assets/{asset_id}/archive"),
     }
     found = set()
     for path in v1.glob("*.py"):
         for block in re.split(r"(?=^@router\.)", path.read_text(encoding="utf-8"), flags=re.M):
-            m = re.match(r'@router\.(get|post|put|patch|delete)\("([^"]*)"', block)
+            # The path may sit on the following line when the decorator carries
+            # dependencies, so allow leading whitespace before the literal.
+            m = re.match(r'@router\.(get|post|put|patch|delete)\(\s*"([^"]*)"', block)
             if not m or m.group(1) == "get":
                 continue
             if "require_permission(Permission." in block:

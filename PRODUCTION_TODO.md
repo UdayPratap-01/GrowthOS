@@ -775,6 +775,53 @@ implemented — they are not security fixes required by the above):
 
 ## P2 — Launch requirements
 
+> **Status — P2-A (AI creative & campaign engine) completed 2026-08-11.** It is a
+> capability item rather than one of the numbered launch blockers below, and it
+> closes none of them: no payments are taken and nothing is published. It is
+> tracked here as **P2-A** with the remaining work it exposed.
+>
+> | Item | Status | Verification |
+> |---|---|---|
+> | P2-A strategy / brief / copy / concepts | **VERIFIED** | 35 tests in 3 new files; distinct-hypothesis and no-fabrication asserted directly |
+> | P2-A real image generation | **IMPLEMENTED, VENDOR UNVERIFIED** | pipeline, storage, retrieval and failure paths tested; no vendor key in this environment |
+> | P2-A real video generation | **IMPLEMENTED, VENDOR UNVERIFIED** | submit → poll → download → store tested with a fake provider; no vendor key in this environment |
+> | P2-A variations, structure, approval | **VERIFIED** | axis + hypothesis enforced; approval records who, when and why |
+> | P2-A guardrails and metering | **VERIFIED** | quantities clamped server-side; retries do not double-charge |
+> | P2-A tenant isolation and RBAC | **VERIFIED** | 9 dedicated tests; every new write route in the authorization coverage guard |
+> | P2-A publishing | **OUT OF SCOPE** | no publish call exists; terminal state is `READY_TO_PUBLISH` |
+>
+> Full detail: [`docs/AI_CREATIVE_ENGINE.md`](docs/AI_CREATIVE_ENGINE.md) and
+> §0c of [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md).
+
+### P2-A-1 · Verify image and video generation against a real vendor — **S (mostly waiting on credentials)**
+The provider adapters, storage write, retrieval, authorization and every failure
+path are tested, but no vendor API key exists in this environment, so the round
+trip to OpenAI Images and Replicate is **unverified**. Run
+`apps/api/scripts/verify_p2a_e2e.py` in an environment with
+`IMAGE_PROVIDER=openai` and `VIDEO_PROVIDER=replicate` set; it reports the
+provider it actually used and refuses to describe demo output as real. Until then
+no claim of working vendor generation may be made.
+
+### P2-A-2 · Decide the retention policy for generated media — **S**
+Every generation writes to object storage and nothing prunes it. Concepts and
+assets can be archived (soft, reversible, deliberately not a delete so an ad
+cannot be orphaned) but archived bytes stay billable indefinitely. Needs a
+documented retention window and a reaper job before this is sold by volume.
+
+### P2-A-3 · Reconcile the two campaign-creation paths — **M**
+`/campaign-builder` (P1) and `/ai-campaigns` (P2-A) both produce campaigns.
+`Campaign.review_status` is the P2-A approval state and `Campaign.status` remains
+the platform delivery state; the two paths write the same table with different
+expectations. Fold the older builder into the generator, or state the division
+explicitly in the UI, before a third path appears.
+
+### P2-A-4 · Cost attribution per generation run — **M**
+Usage is metered per event (`campaign_generation`, `strategy_generation`,
+`copy_generation`, `image_generation`, `video_generation`,
+`variation_generation`), which answers "how many" but not "what did this run
+cost". Provider token and image counts are not captured per run, so margin per
+campaign cannot be computed. Related to P3-12.
+
 ### P2-1 · Implement Stripe billing — **L**
 Zero Stripe references exist repo-wide; `Subscription` (`app/models/ai_ops.py:73-80`) is an inert row created at registration and read by nothing. Add checkout, a signature-verified webhook, plan/seat gating, and a customer portal. **You cannot charge customers today.**
 
@@ -843,6 +890,7 @@ Enable automated Postgres backups with point-in-time recovery, enable bucket ver
 | **4** | Business & launch | P2-1, P2-2, P2-7, P2-9, P2-10, staging validation |
 | **Parallel from day 1** | Platform approvals | P2-4 (2–6 week lead time) |
 | **Post-launch** | Hardening | P2-3, P2-5, P2-6, P2-8, then P3 |
+| **When credentials exist** | Prove the media vendors | P2-A-1, then P2-A-2 |
 
 **Critical path to a payment-taking launch:** P0 (all) → P1-1, P1-2, P1-4, P1-5, P1-6, P1-8 → P2-1, P2-2, P2-10.
 

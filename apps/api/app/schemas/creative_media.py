@@ -59,6 +59,10 @@ class CreativeAssetMediaOut(BaseModel):
     id: UUID
     client_id: UUID
     campaign_id: UUID | None
+    #: Which generated idea this file belongs to, so the library can be filtered
+    #: by concept and a variation's renders are distinguishable from its parent's.
+    concept_id: UUID | None = None
+    variation_id: UUID | None = None
     name: str
     asset_type: str
     platform: str | None
@@ -70,11 +74,16 @@ class CreativeAssetMediaOut(BaseModel):
     width: int | None = None
     height: int | None = None
     duration_seconds: int | None = None
+    aspect_ratio: str | None = None
     status: str
     content: dict
     meta: dict
     data_source: str
     url: str | None = None
+    #: Set when a real provider produced this file. False means demo output,
+    #: which must never be presented as a live asset.
+    is_real: bool = False
+    archived_at: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

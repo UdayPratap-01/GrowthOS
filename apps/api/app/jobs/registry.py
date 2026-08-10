@@ -22,6 +22,8 @@ REPORT_GENERATE = "report.generate"
 ANALYTICS_SYNC = "analytics.sync"
 LEAD_BACKFILL = "leads.backfill_meta_contact"
 PUBLISH_DUE = "publish_due"
+CAMPAIGN_GENERATE = "campaign.generate"
+CAMPAIGN_RECONCILE = "campaign.reconcile"
 
 
 def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
@@ -35,6 +37,8 @@ def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
     queue.register(ANALYTICS_SYNC, handlers.handle_analytics_sync)
     queue.register(LEAD_BACKFILL, handlers.handle_lead_backfill)
     queue.register(PUBLISH_DUE, handlers.handle_publish_due)
+    queue.register(CAMPAIGN_GENERATE, handlers.handle_generate_campaign)
+    queue.register(CAMPAIGN_RECONCILE, handlers.handle_reconcile_campaign_run)
     return queue
 
 
@@ -47,4 +51,6 @@ def registered_job_types() -> tuple[str, ...]:
         ANALYTICS_SYNC,
         LEAD_BACKFILL,
         PUBLISH_DUE,
+        CAMPAIGN_GENERATE,
+        CAMPAIGN_RECONCILE,
     )

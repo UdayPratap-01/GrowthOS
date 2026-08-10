@@ -142,6 +142,19 @@ class Settings(BaseSettings):
     video_model: str = ""  # replicate owner/name or version hash
     meta_webhook_verify_token: str = ""
 
+    # ---- P2-A campaign generation guardrails ----------------------------
+    # Hard ceilings applied server-side to one "Generate Campaign" request.
+    # Every image and video below costs real provider money, so these are the
+    # control that stops a scripted or mistyped request from generating
+    # hundreds of assets. Frontend inputs are a convenience, never the limit.
+    max_concepts_per_generation: int = 5
+    max_images_per_generation: int = 8
+    max_videos_per_generation: int = 4
+    max_variations_per_generation: int = 12
+    # Ceiling on generation runs an organization may start per hour, on top of
+    # the per-metric quota. Guards against a retry loop in a client.
+    campaign_generation_rate_limit_per_hour: int = 20
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

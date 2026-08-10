@@ -92,7 +92,11 @@ class OrganizationSubscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     plan_code: Mapped[str] = mapped_column(String(64), nullable=False, default="free")
     status: Mapped[SubscriptionStatus] = mapped_column(
-        Enum(SubscriptionStatus, name="subscription_status", native_enum=False),
+        # `length` is stated so the column stays VARCHAR(32) instead of being
+        # sized to the longest current member. A status added later would
+        # otherwise need an ALTER on a live table, and the declared width would
+        # no longer match the migrated schema.
+        Enum(SubscriptionStatus, name="subscription_status", native_enum=False, length=32),
         nullable=False,
         default=SubscriptionStatus.TRIALING,
         index=True,

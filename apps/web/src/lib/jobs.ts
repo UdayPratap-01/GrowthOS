@@ -16,7 +16,10 @@ export type MediaJobStatus =
   | "uploading"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  // A provider was never configured. Distinct from `failed` because nothing was
+  // attempted and no retry will help until an operator adds credentials.
+  | "not_configured";
 
 export type MediaJob = {
   job_id: string | null;
@@ -51,6 +54,7 @@ export function normalizeMediaPhase(status: string | null | undefined): MediaJob
   if (value === "COMPLETED") return "completed";
   if (value === "FAILED") return "failed";
   if (value === "CANCELLED") return "cancelled";
+  if (value === "NOT_CONFIGURED") return "not_configured";
   return "generating";
 }
 
@@ -72,6 +76,8 @@ export function mediaPhaseLabel(phase: MediaJobStatus): string {
       return "Failed";
     case "cancelled":
       return "Cancelled";
+    case "not_configured":
+      return "Not configured";
   }
 }
 
@@ -83,6 +89,7 @@ export function mediaPhaseTone(phase: MediaJobStatus): string {
     case "cancelled":
       return "danger";
     case "queued":
+    case "not_configured":
       return "warning";
     case "generating":
     case "processing":
@@ -95,7 +102,12 @@ export function mediaPhaseTone(phase: MediaJobStatus): string {
 
 export function isTerminalMediaStatus(status: string | null | undefined): boolean {
   const phase = normalizeMediaPhase(status);
-  return phase === "completed" || phase === "failed" || phase === "cancelled";
+  return (
+    phase === "completed" ||
+    phase === "failed" ||
+    phase === "cancelled" ||
+    phase === "not_configured"
+  );
 }
 
 /**

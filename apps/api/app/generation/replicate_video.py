@@ -216,6 +216,58 @@ class ReplicateVideoProvider(VideoGenerationProvider):
     async def get_result(self, provider_job_id: str) -> GenerationResult:
         return await self.get_status(provider_job_id)
 
+    async def cancel(self, provider_job_id: str) -> GenerationResult:
+        """
+        Stop a running prediction so it stops accruing cost.
+
+        Only a 2xx from the provider counts as cancelled. Anything else is
+        reported as a failed cancellation, because a job we believe is stopped
+        but which is still running is the worst of both states.
+        """
+        if not self.configured():
+            return GenerationResult(
+                success=False,
+                status="not_configured",
+                provider=self.name,
+                message="VIDEO GENERATION NOT CONFIGURED",
+                error="VIDEO GENERATION NOT CONFIGURED",
+                error_code="NOT_CONFIGURED",
+            )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"https://api.replicate.com/v1/predictions/{provider_job_id}/cancel",
+                    headers={"Authorization": f"Token {self.api_key}"},
+                )
+        except httpx.HTTPError as exc:
+            return GenerationResult(
+                success=False,
+                status="failed",
+                provider=self.name,
+                message="Provider network error while cancelling",
+                error=str(exc)[:300],
+                error_code="NETWORK_ERROR",
+                retryable=True,
+                external_id=provider_job_id,
+            )
+        if resp.status_code >= 400:
+            return GenerationResult(
+                success=False,
+                status="failed",
+                provider=self.name,
+                message="Provider refused the cancellation",
+                error=resp.text[:300],
+                error_code=f"HTTP_{resp.status_code}",
+                external_id=provider_job_id,
+            )
+        return GenerationResult(
+            success=True,
+            status="cancelled",
+            provider=self.name,
+            message="Provider confirmed the generation was cancelled.",
+            external_id=provider_job_id,
+        )
+
     async def _materialize(self, data: dict, base: GenerationResult) -> GenerationResult:
         output = data.get("output")
         url = None

@@ -6,6 +6,7 @@ from app.api.v1 import (
     auth,
     autopilot,
     billing,
+    campaign_generation,
     campaigns,
     clients,
     competitors,
@@ -34,6 +35,7 @@ api_router.include_router(assistant.router)
 api_router.include_router(integrations.router)
 api_router.include_router(analytics.router)
 api_router.include_router(campaigns.router)
+api_router.include_router(campaign_generation.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(reports.router)
 api_router.include_router(competitors.router)

@@ -18,6 +18,8 @@ coverage/
 storage/
 storage_test_media/
 storage_test_media_unit/
+storage_test_campaign/
+storage_verify_p2a/
 media/
 apps/api/storage/
 apps/api/media/

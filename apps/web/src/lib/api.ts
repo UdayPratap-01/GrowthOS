@@ -221,6 +221,32 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return res.json() as Promise<T>;
 }
 
+/**
+ * Save a creative asset to disk.
+ *
+ * Routed through the authenticated API with `?download=true` rather than a
+ * public link, so an asset can only be saved by someone entitled to read it and
+ * the server supplies the filename.
+ */
+export async function downloadMedia(path: string): Promise<void> {
+  const objectUrl = await fetchMediaObjectUrl(
+    path.includes("?") ? `${path}&download=true` : `${path}?download=true`,
+  );
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    // Left empty so the server's Content-Disposition filename is used.
+    anchor.download = "";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    // Revoked on a delay: revoking immediately can cancel the download in
+    // Safari before it has read the blob.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+  }
+}
+
 /** Authenticated binary fetch for creative media (never use bare img src without auth). */
 export async function fetchMediaObjectUrl(path: string): Promise<string> {
   const token = getToken();

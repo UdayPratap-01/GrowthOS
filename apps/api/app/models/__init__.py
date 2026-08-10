@@ -16,6 +16,12 @@ from app.models.automation import (
 )
 from app.models.billing import BillingEvent, OrganizationSubscription, Plan, SubscriptionStatus
 from app.models.client import Client, ClientUser
+from app.models.creative import (
+    CampaignBrief,
+    CampaignGenerationRun,
+    CreativeConcept,
+    CreativeVariation,
+)
 from app.models.leads import Lead, LeadActivity
 from app.models.marketing import (
     Ad,
@@ -83,4 +89,8 @@ __all__ = [
     "OrganizationSubscription",
     "SubscriptionStatus",
     "BillingEvent",
+    "CampaignBrief",
+    "CampaignGenerationRun",
+    "CreativeConcept",
+    "CreativeVariation",
 ]

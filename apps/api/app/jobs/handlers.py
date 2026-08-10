@@ -221,6 +221,73 @@ def _parse_deadline(value) -> datetime:
 
 
 # --------------------------------------------------------------------------
+# Campaign generation
+# --------------------------------------------------------------------------
+
+
+async def handle_generate_campaign(db: AsyncSession, job: BackgroundJob) -> dict:
+    """
+    Run one P2-A campaign generation.
+
+    The HTTP request only recorded the run and enqueued this. Failures are
+    recorded on the run itself by the service, so this handler returns normally
+    for a failed generation rather than raising: retrying a campaign whose
+    strategy call was rejected would spend the same money again for the same
+    result, and the reviewer already has the reason.
+    """
+    from app.models.creative import CampaignGenerationRun
+    from app.services.campaign_generation_service import CampaignGenerationService
+
+    run_id = (job.payload or {}).get("run_id")
+    if not run_id:
+        raise UnrecoverableJobError("payload.run_id is required")
+
+    run = await db.get(CampaignGenerationRun, UUID(str(run_id)))
+    if run is None:
+        raise UnrecoverableJobError(f"CampaignGenerationRun {run_id} not found")
+    _assert_same_tenant(job, run, f"CampaignGenerationRun {run_id}")
+
+    organization = await _load_organization(db, run.organization_id)
+    service = CampaignGenerationService(db)
+    await service.execute(organization, run)
+    await service.schedule_reconcile(run)
+    await db.flush()
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "campaign_id": str(run.campaign_id) if run.campaign_id else None,
+        "error_code": run.error_code,
+    }
+
+
+async def handle_reconcile_campaign_run(db: AsyncSession, job: BackgroundJob) -> dict:
+    """
+    Bring a run's media counts up to date and promote it when the media is done.
+
+    Reschedules itself while anything is outstanding, in the same shape as
+    `media.poll_video`, so a run reaches READY_FOR_REVIEW even if nobody is
+    polling it from the UI.
+    """
+    from app.models.creative import CampaignGenerationRun
+    from app.services.campaign_generation_service import CampaignGenerationService
+
+    run_id = (job.payload or {}).get("run_id")
+    if not run_id:
+        raise UnrecoverableJobError("payload.run_id is required")
+
+    run = await db.get(CampaignGenerationRun, UUID(str(run_id)))
+    if run is None:
+        raise UnrecoverableJobError(f"CampaignGenerationRun {run_id} not found")
+    _assert_same_tenant(job, run, f"CampaignGenerationRun {run_id}")
+
+    service = CampaignGenerationService(db)
+    await service.reconcile(run)
+    await service.schedule_reconcile(run)
+    await db.flush()
+    return {"run_id": str(run.id), "status": run.status}
+
+
+# --------------------------------------------------------------------------
 # Reports and analytics
 # --------------------------------------------------------------------------
 

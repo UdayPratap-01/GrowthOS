@@ -1,3 +1,5 @@
+export * from "./campaign-generation";
+
 export type User = {
   id: string;
   email: string;
@@ -404,11 +406,15 @@ export type CreativeAsset = {
   id: string;
   client_id: string;
   campaign_id: string | null;
+  /** Set for assets the campaign engine generated, so the library can be filtered by idea. */
+  concept_id?: string | null;
+  variation_id?: string | null;
   name: string;
   asset_type: string;
   platform: string | null;
   prompt: string | null;
   provider: string | null;
+  model?: string | null;
   status: string;
   content: Record<string, unknown>;
   meta: Record<string, unknown>;
@@ -416,8 +422,13 @@ export type CreativeAsset = {
   mime_type?: string | null;
   width?: number | null;
   height?: number | null;
+  duration_seconds?: number | null;
+  aspect_ratio?: string | null;
   storage_key?: string | null;
   url?: string | null;
+  /** True only when a real provider produced the file. False means demo output. */
+  is_real?: boolean;
+  archived_at?: string | null;
   created_at: string;
 };
 

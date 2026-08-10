@@ -3,23 +3,37 @@ from __future__ import annotations
 from app.ai.agents.ads_agent import AdsAgent, AdsInsight, AdsInsightRequest
 from app.ai.agents.analytics_agent import AnalyticsAgent, AnalyticsInsight, AnalyticsInsightRequest
 from app.ai.agents.autopilot_agent import AutopilotAgent, AutopilotPlan, AutopilotPlanRequest
+from app.ai.agents.campaign_builder_agent import CampaignBuilderAgent, CampaignBuilderRequest
 from app.ai.agents.campaign_planner_agent import (
     CampaignPlanRequest,
     CampaignPlannerAgent,
     CampaignStructure,
 )
+from app.ai.agents.campaign_strategy_agent import CampaignStrategyAgent, CampaignStrategyRequest
 from app.ai.agents.competitor_agent import CompetitorAgent, CompetitorInsight, CompetitorInsightRequest
 from app.ai.agents.content_agent import ContentAgent
+from app.ai.agents.copy_agent import CopyAgent, CopyRequest
 from app.ai.agents.creative_agent import CreativeAgent, CreativePack, CreativeRequest
+from app.ai.agents.creative_brief_agent import CreativeBriefAgent, CreativeBriefRequest
+from app.ai.agents.creative_concept_agent import CreativeConceptAgent, CreativeConceptRequest
 from app.ai.agents.image_creative_agent import ImageCreativeAgent, ImageCreativePack, ImageCreativeRequest
 from app.ai.agents.lead_agent import LeadAgent, LeadScoreRequest
 from app.ai.agents.monitoring_agent import MonitoringAgent, MonitoringReport, MonitoringRequest
 from app.ai.agents.optimization_agent import OptimizationAgent, OptimizationPlan, OptimizationRequest
 from app.ai.agents.report_agent import ReportAgent, ReportRequest, WeeklyReportDraft
 from app.ai.agents.strategy_agent import StrategyAgent, StrategyRequest
+from app.ai.agents.variation_agent import VariationAgent, VariationRequest
 from app.ai.agents.video_agent import VideoAgent, VideoAgentRequest, VideoPack
 from app.ai.providers.base import AIProvider, Message
 from app.ai.providers.factory import get_ai_provider
+from app.schemas.campaign_generation import (
+    CampaignBlueprint,
+    CampaignBriefDraft,
+    CampaignStrategy,
+    CopyConceptPack,
+    CreativeConceptPack,
+    VariationPack,
+)
 from app.schemas.client import ClientContext
 from app.schemas.content import ContentGenerateRequest, ContentGenerated
 from app.schemas.lead import LeadScoreExplanation
@@ -45,6 +59,15 @@ class AIOrchestrator:
         self.image_creative_agent = ImageCreativeAgent(self.provider)
         self.video_agent = VideoAgent(self.provider)
         self.competitor_agent = CompetitorAgent(self.provider)
+        # P2-A creative engine. Separate agents rather than one prompt: each
+        # stage validates its own schema, and a failure names the stage that
+        # failed instead of collapsing the whole campaign into one error.
+        self.campaign_strategy_agent = CampaignStrategyAgent(self.provider)
+        self.creative_brief_agent = CreativeBriefAgent(self.provider)
+        self.copy_agent = CopyAgent(self.provider)
+        self.creative_concept_agent = CreativeConceptAgent(self.provider)
+        self.variation_agent = VariationAgent(self.provider)
+        self.campaign_builder_agent = CampaignBuilderAgent(self.provider)
 
     async def generate_strategy(self, context: ClientContext, title: str | None = None) -> StrategyGenerated:
         return await self.strategy_agent.run(context, StrategyRequest(title=title))
@@ -107,6 +130,38 @@ class AIOrchestrator:
         self, context: ClientContext, request: CompetitorInsightRequest | None = None
     ) -> CompetitorInsight:
         return await self.competitor_agent.run(context, request or CompetitorInsightRequest())
+
+    # ------------------------------------------------------------------
+    # P2-A campaign generation stages
+    # ------------------------------------------------------------------
+
+    async def campaign_strategy(
+        self, context: ClientContext, request: CampaignStrategyRequest
+    ) -> CampaignStrategy:
+        return await self.campaign_strategy_agent.run(context, request)
+
+    async def creative_brief(
+        self, context: ClientContext, request: CreativeBriefRequest
+    ) -> CampaignBriefDraft:
+        return await self.creative_brief_agent.run(context, request)
+
+    async def campaign_copy(self, context: ClientContext, request: CopyRequest) -> CopyConceptPack:
+        return await self.copy_agent.run(context, request)
+
+    async def creative_concepts(
+        self, context: ClientContext, request: CreativeConceptRequest
+    ) -> CreativeConceptPack:
+        return await self.creative_concept_agent.run(context, request)
+
+    async def creative_variations(
+        self, context: ClientContext, request: VariationRequest
+    ) -> VariationPack:
+        return await self.variation_agent.run(context, request)
+
+    async def build_campaign_structure(
+        self, context: ClientContext, request: CampaignBuilderRequest
+    ) -> CampaignBlueprint:
+        return await self.campaign_builder_agent.run(context, request)
 
     async def chat(self, context: ClientContext, question: str) -> str:
         messages = [

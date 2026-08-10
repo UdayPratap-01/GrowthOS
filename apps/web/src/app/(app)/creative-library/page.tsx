@@ -10,7 +10,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { api, errorMessage } from "@/lib/api";
+import { api, downloadMedia, errorMessage } from "@/lib/api";
 import {
   MediaJob,
   mediaPhaseLabel,
@@ -19,9 +19,14 @@ import {
   pollMediaJob,
   type MediaJobStatus,
 } from "@/lib/jobs";
-import { Client, CreativeAsset } from "@/types";
+import { Campaign, Client, CreativeAsset } from "@/types";
 
 const TYPE_FILTERS = ["all", "image", "video", "concept", "image_concept", "video_concept", "variation"];
+
+//: Asset lifecycle states worth filtering by. NOT_CONFIGURED is included because
+//: "nothing was generated because no provider exists" is a state a user needs to
+//: find, not an error to be buried.
+const STATUS_FILTERS = ["all", "completed", "queued", "generating", "failed", "not_configured"];
 
 type ProviderStatus = {
   image_provider: string;
@@ -44,13 +49,18 @@ type ActiveJob = {
 export default function CreativeLibraryPage() {
   const [assets, setAssets] = useState<CreativeAsset[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [clientId, setClientId] = useState("");
+  const [campaignId, setCampaignId] = useState("");
   const [assetType, setAssetType] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [prompt, setPrompt] = useState("Premium brand product hero creative, clean lighting");
   const [providers, setProviders] = useState<ProviderStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<ActiveJob | null>(null);
+  const [pendingAsset, setPendingAsset] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   async function load() {
@@ -58,16 +68,22 @@ export default function CreativeLibraryPage() {
     try {
       const params = new URLSearchParams();
       if (clientId) params.set("client_id", clientId);
+      if (campaignId) params.set("campaign_id", campaignId);
       if (assetType !== "all") params.set("asset_type", assetType);
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (includeArchived) params.set("include_archived", "true");
       const suffix = params.toString() ? `?${params}` : "";
-      const [a, c, p] = await Promise.all([
+      const campaignQuery = clientId ? `?client_id=${clientId}` : "";
+      const [a, c, p, camps] = await Promise.all([
         api<CreativeAsset[]>(`/creative/assets${suffix}`),
         api<Client[]>("/clients"),
         api<ProviderStatus>("/creative/providers"),
+        api<Campaign[]>(`/campaigns${campaignQuery}`),
       ]);
       setAssets(a);
       setClients(c);
       setProviders(p);
+      setCampaigns(camps);
       if (!clientId && c[0]) setClientId(c[0].id);
     } catch (err) {
       setError(errorMessage(err));
@@ -79,7 +95,7 @@ export default function CreativeLibraryPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientId, assetType]);
+  }, [clientId, campaignId, assetType, statusFilter, includeArchived]);
 
   useEffect(() => {
     return () => {
@@ -215,6 +231,37 @@ export default function CreativeLibraryPage() {
     await startGeneration(active.kind);
   }
 
+  /** Save a stored asset. Routed through the authenticated API, never a public link. */
+  async function download(asset: CreativeAsset) {
+    if (!asset.url) return;
+    setPendingAsset(asset.id);
+    setError(null);
+    try {
+      await downloadMedia(asset.url);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPendingAsset(null);
+    }
+  }
+
+  /** Hide or restore an asset. The stored file is kept either way. */
+  async function toggleArchive(asset: CreativeAsset) {
+    setPendingAsset(asset.id);
+    setError(null);
+    try {
+      await api<CreativeAsset>(
+        `/creative/assets/${asset.id}/archive?archived=${asset.archived_at ? "false" : "true"}`,
+        { method: "POST" },
+      );
+      await load();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setPendingAsset(null);
+    }
+  }
+
   async function regenerate(asset: CreativeAsset) {
     setError(null);
     setActive({
@@ -266,6 +313,9 @@ export default function CreativeLibraryPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Link href="/ai-campaigns/new">
+            <Button>Create campaign with AI</Button>
+          </Link>
           <Link href="/campaign-builder">
             <Button variant="secondary">Campaign Builder</Button>
           </Link>
@@ -330,12 +380,24 @@ export default function CreativeLibraryPage() {
       </Card>
 
       <Card>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Select className="w-48" value={clientId} onChange={(e) => setClientId(e.target.value)}>
             <option value="">All clients</option>
             {clients.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.business_name}
+              </option>
+            ))}
+          </Select>
+          <Select
+            className="w-56"
+            value={campaignId}
+            onChange={(e) => setCampaignId(e.target.value)}
+          >
+            <option value="">All campaigns</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
               </option>
             ))}
           </Select>
@@ -346,6 +408,25 @@ export default function CreativeLibraryPage() {
               </option>
             ))}
           </Select>
+          <Select
+            className="w-48"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            {STATUS_FILTERS.map((s) => (
+              <option key={s} value={s}>
+                {s.replaceAll("_", " ")}
+              </option>
+            ))}
+          </Select>
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+            />
+            Show archived
+          </label>
           <Button variant="secondary" onClick={load}>
             Refresh
           </Button>
@@ -359,47 +440,75 @@ export default function CreativeLibraryPage() {
         />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {assets.map((a) => (
-            <Card key={a.id}>
-              {a.url && (a.asset_type === "image" || a.asset_type === "video") ? (
-                <MediaPreview
-                  url={a.url}
-                  mimeType={a.mime_type}
-                  alt={a.name}
-                  demo={a.data_source === "demo"}
-                />
-              ) : (
-                <div className="flex h-40 items-center justify-center rounded-xl bg-[var(--surface-2)] text-xs text-[var(--muted)]">
-                  {a.asset_type.includes("concept") ? "Concept / prompt only" : "No media file"}
+          {assets.map((a) => {
+            const assetPhase = normalizeMediaPhase(a.status);
+            const pending = pendingAsset === a.id;
+            return (
+              <Card key={a.id} className={a.archived_at ? "opacity-60" : undefined}>
+                {a.url && (a.asset_type === "image" || a.asset_type === "video") ? (
+                  <MediaPreview
+                    url={a.url}
+                    mimeType={a.mime_type}
+                    alt={a.name}
+                    demo={a.data_source === "demo"}
+                  />
+                ) : (
+                  <div className="flex h-40 flex-col items-center justify-center gap-2 rounded-xl bg-[var(--surface-2)] px-3 text-center text-xs text-[var(--muted)]">
+                    <Badge tone={mediaPhaseTone(assetPhase)}>{mediaPhaseLabel(assetPhase)}</Badge>
+                    {a.asset_type.includes("concept")
+                      ? "Concept / prompt only"
+                      : assetPhase === "not_configured"
+                        ? "No provider configured, so no file was generated."
+                        : "No media file"}
+                  </div>
+                )}
+                <div className="mt-3 flex items-start justify-between gap-2">
+                  <div className="font-medium">{a.name}</div>
+                  <Badge tone={mediaPhaseTone(assetPhase)}>{mediaPhaseLabel(assetPhase)}</Badge>
                 </div>
-              )}
-              <div className="mt-3 flex items-start justify-between gap-2">
-                <div className="font-medium">{a.name}</div>
-                <Badge
-                  tone={
-                    a.data_source === "demo"
-                      ? "demo"
-                      : a.status === "completed"
-                        ? "success"
-                        : a.status === "failed"
-                          ? "danger"
-                          : "accent"
-                  }
-                >
-                  {a.data_source === "demo" ? "DEMO" : a.status}
-                </Badge>
-              </div>
-              <div className="mt-2 text-xs text-[var(--muted)]">
-                {clientName(a.client_id)} · {a.asset_type} · {a.provider || "n/a"}
-              </div>
-              {a.prompt ? <p className="mt-2 line-clamp-3 text-sm text-[var(--muted)]">{a.prompt}</p> : null}
-              <div className="mt-3">
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => regenerate(a)}>
-                  Create variation
-                </Button>
-              </div>
-            </Card>
-          ))}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {/* REAL and DEMO are stated explicitly so demo output can never be
+                      mistaken for a production asset. */}
+                  <Badge tone={a.data_source === "demo" ? "demo" : "success"}>
+                    {a.data_source === "demo" ? "Demo" : "Real"}
+                  </Badge>
+                  {a.archived_at ? <Badge>Archived</Badge> : null}
+                  {a.aspect_ratio ? <Badge tone="low">{a.aspect_ratio}</Badge> : null}
+                </div>
+                <div className="mt-2 text-xs text-[var(--muted)]">
+                  {clientName(a.client_id)} · {a.asset_type} · {a.provider || "n/a"}
+                </div>
+                {a.prompt ? (
+                  <p className="mt-2 line-clamp-3 text-sm text-[var(--muted)]">{a.prompt}</p>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => regenerate(a)}>
+                    Create variation
+                  </Button>
+                  {a.url ? (
+                    <Button size="sm" variant="ghost" disabled={pending} onClick={() => download(a)}>
+                      {pending ? "Preparing…" : "Download"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={pending}
+                    onClick={() => toggleArchive(a)}
+                  >
+                    {a.archived_at ? "Restore" : "Archive"}
+                  </Button>
+                  {a.campaign_id ? (
+                    <Link href={`/ai-campaigns/${a.campaign_id}`}>
+                      <Button size="sm" variant="ghost">
+                        Campaign
+                      </Button>
+                    </Link>
+                  ) : null}
+                </div>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

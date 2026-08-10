@@ -13,6 +13,8 @@ See:
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 - [`docs/AUTONOMOUS_MARKETING_ARCHITECTURE.md`](docs/AUTONOMOUS_MARKETING_ARCHITECTURE.md)
 - [`docs/AUTONOMOUS_MARKETING_IMPLEMENTATION_REPORT.md`](docs/AUTONOMOUS_MARKETING_IMPLEMENTATION_REPORT.md)
+- [`docs/AI_CREATIVE_ENGINE.md`](docs/AI_CREATIVE_ENGINE.md) — AI campaign & creative generation (P2-A)
+- [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 
 ```
 apps/
@@ -167,6 +169,23 @@ STORAGE_LOCAL_PATH=./storage
 ```
 
 See [`docs/MEDIA_GENERATION_IMPLEMENTATION_REPORT.md`](docs/MEDIA_GENERATION_IMPLEMENTATION_REPORT.md).
+
+### AI campaign & creative engine
+
+`/ai-campaigns` generates a full campaign package from a client's stored context:
+strategy, brief, ad copy concepts, creative concepts, real images and videos when
+a provider is configured, variations, and a campaign → ad set → ad structure.
+Generation is asynchronous over the job queue and the page shows real stage
+progress.
+
+Nothing is published and no advertising money can be spent. The package stops at
+`READY_FOR_REVIEW`, a human approves it, and the terminal state is
+`READY_TO_PUBLISH`. There is no `PUBLISHED` state. Media reports
+`NOT_CONFIGURED` rather than falling back to demo output when no provider is set,
+and per-organization ceilings (`MAX_IMAGES_PER_GENERATION` and friends) are
+enforced server-side.
+
+See [`docs/AI_CREATIVE_ENGINE.md`](docs/AI_CREATIVE_ENGINE.md).
 
 ### Phase 3–4 integrations
 

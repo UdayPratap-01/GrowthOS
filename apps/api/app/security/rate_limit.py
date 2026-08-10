@@ -218,6 +218,11 @@ def policies() -> dict[str, RateLimitPolicy]:
         "campaign_execution": RateLimitPolicy(
             "campaign_execution", s.campaign_execution_rate_limit_per_minute, 60
         ),
+        # Hourly, not per-minute: one generation can fan out into a dozen paid
+        # image and video calls, so the budget that matters is the hourly one.
+        "campaign_generation": RateLimitPolicy(
+            "campaign_generation", s.campaign_generation_rate_limit_per_hour, 3600
+        ),
         "webhook": RateLimitPolicy("webhook", s.webhook_rate_limit_per_minute, 60),
     }
 

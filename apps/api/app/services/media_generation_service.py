@@ -108,18 +108,26 @@ class MediaGenerationService:
         quantity: int = 1,
         platform: str | None = None,
         idempotency_key: str | None = None,
+        concept_id: UUID | None = None,
+        variation_id: UUID | None = None,
+        run_id: UUID | None = None,
+        max_quantity: int = 5,
     ) -> dict:
         provider = get_image_provider()
         if not provider.configured():
+            # NOT_CONFIGURED, not FAILED. A missing provider is a setup gap the
+            # operator can close, and reporting it as a failure sends the reader
+            # looking for a broken generation that never ran.
             return {
                 "job_id": None,
                 "jobs": [],
-                "status": "FAILED",
+                "status": "NOT_CONFIGURED",
                 "error": "IMAGE GENERATION NOT CONFIGURED",
+                "error_code": "MEDIA_PROVIDER_NOT_CONFIGURED",
                 "message": "Image generation is not configured. Add IMAGE_PROVIDER and IMAGE_API_KEY (or OPENAI_API_KEY).",
             }
 
-        quantity = max(1, min(int(quantity or 1), 5))
+        quantity = max(1, min(int(quantity or 1), max(1, int(max_quantity))))
         jobs_out = []
         for i in range(quantity):
             key = f"{idempotency_key}:{i}" if idempotency_key else None
@@ -138,6 +146,9 @@ class MediaGenerationService:
                 organization_id=organization.id,
                 client_id=client_id,
                 campaign_id=campaign_id,
+                concept_id=concept_id,
+                variation_id=variation_id,
+                run_id=run_id,
                 provider=provider.name,
                 prompt=prompt if quantity == 1 else f"{prompt} — variation {i + 1}",
                 aspect_ratio=aspect_ratio,
@@ -191,14 +202,18 @@ class MediaGenerationService:
         aspect_ratio: str = "9:16",
         platform: str | None = None,
         idempotency_key: str | None = None,
+        concept_id: UUID | None = None,
+        variation_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> dict:
         provider = get_video_provider()
         if not provider.configured():
             return {
                 "job_id": None,
                 "provider_job_id": None,
-                "status": "FAILED",
+                "status": "NOT_CONFIGURED",
                 "error": "VIDEO GENERATION NOT CONFIGURED",
+                "error_code": "MEDIA_PROVIDER_NOT_CONFIGURED",
                 "message": "Video generation is not configured. Add VIDEO_PROVIDER and VIDEO_API_KEY (and VIDEO_MODEL for Replicate).",
             }
 
@@ -216,6 +231,9 @@ class MediaGenerationService:
             organization_id=organization.id,
             client_id=client_id,
             campaign_id=campaign_id,
+            concept_id=concept_id,
+            variation_id=variation_id,
+            run_id=run_id,
             provider=provider.name,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
@@ -247,6 +265,59 @@ class MediaGenerationService:
             if org:
                 await self._process_video_job(org, job, poll=True)
         return await self._video_job_payload(job)
+
+    async def cancel_job(self, organization_id: UUID, job_id: UUID, *, kind: str) -> dict:
+        """
+        Cancel a media job that has not finished.
+
+        For video the provider is asked first: a generation still running at the
+        provider keeps costing money, so recording a local cancellation without
+        telling the provider would save nothing. A provider that cannot cancel is
+        reported as such and the job is still marked cancelled locally, because
+        the user's intent — do not use this asset — is still honoured.
+        """
+        model = ImageJob if kind == "image" else VideoJob
+        job = await self.db.scalar(
+            select(model).where(model.id == job_id, model.organization_id == organization_id)
+        )
+        if not job:
+            return {"error": "NOT_FOUND", "status": "FAILED"}
+        if job.status in {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}:
+            payload = await self._job_payload(job, kind)
+            payload["message"] = "This job had already finished; nothing to cancel."
+            return payload
+
+        provider_message = None
+        if kind == "video" and getattr(job, "provider_job_id", None):
+            outcome = await get_video_provider().cancel(job.provider_job_id)
+            provider_message = outcome.message
+            if not outcome.success:
+                # Recorded, not hidden: the operator needs to know the provider
+                # may still be generating and billing.
+                events.media_generation(
+                    kind="video",
+                    provider=job.provider,
+                    job_id=job.id,
+                    organization_id=organization_id,
+                    status="CANCEL_FAILED",
+                    error=outcome.error,
+                )
+
+        job.status = JobStatus.cancelled
+        job.error = None
+        job.error_code = None
+        job.retryable = False
+        job.result = {**(job.result or {}), "message": provider_message or "Cancelled."}
+        flag_modified(job, "result")
+        await self.db.flush()
+        return await self._job_payload(job, kind)
+
+    async def _job_payload(self, job, kind: str) -> dict:
+        return (
+            await self._image_job_payload(job)
+            if kind == "image"
+            else await self._video_job_payload(job)
+        )
 
     async def create_variations(
         self,
@@ -348,8 +419,11 @@ class MediaGenerationService:
             organization_id=organization.id,
             client_id=job.client_id,
             campaign_id=job.campaign_id,
+            concept_id=job.concept_id,
+            variation_id=job.variation_id,
             name=(job.prompt[:80] or "Generated image"),
             asset_type="image",
+            aspect_ratio=job.aspect_ratio,
             platform=platform,
             prompt=job.prompt,
             provider=provider.name,
@@ -489,8 +563,11 @@ class MediaGenerationService:
             organization_id=organization.id,
             client_id=job.client_id,
             campaign_id=job.campaign_id,
+            concept_id=job.concept_id,
+            variation_id=job.variation_id,
             name=(job.prompt[:80] or "Generated video"),
             asset_type="video",
+            aspect_ratio=job.aspect_ratio,
             platform=platform,
             prompt=job.prompt,
             provider=provider.name,
