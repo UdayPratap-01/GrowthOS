@@ -217,6 +217,25 @@ cancel. A provider that *can* cancel overrides it — `ReplicateVideoProvider`
 calls Replicate's cancel endpoint, which is what stops a long generation from
 continuing to cost money rather than merely hiding it from the library.
 
+### Cancellation semantics
+
+For a video job with a provider job id, the provider's answer decides the local
+state:
+
+| Provider answer | Local result |
+| --- | --- |
+| Cancelled | job becomes `CANCELLED` |
+| Refused (e.g. Replicate 409) or no cancel support | job is **unchanged**; `502 MEDIA_CANCELLATION_FAILED` |
+| — (job already `COMPLETED`/`FAILED`/`CANCELLED`) | provider is not called; current status returned |
+
+A refused cancellation must not be recorded as `CANCELLED`: that would leave a
+generation still running and billing at the vendor with nothing in the product
+watching it. The refusal is logged as a `CANCEL_FAILED` media event with the
+provider's own message, while the response carries only the mapped error code
+(`provider_error_code`) — a provider response body can echo request content, so
+it is never returned to the caller. The caller may retry; each request makes at
+most one provider call.
+
 Selection goes through the existing factory (`get_image_provider`,
 `get_video_provider`) driven by `IMAGE_PROVIDER` / `VIDEO_PROVIDER`. No agent,
 service or endpoint names a vendor. Provider keys live in backend settings and
@@ -507,7 +526,7 @@ All paths are under `/api/v1`.
 | `POST` | `/creative/assets/{id}/archive` | Soft, reversible |
 | `GET` | `/creative/media/{id}` | Bytes; `?download=true` for an attachment |
 | `POST` | `/creative/images/jobs/{id}/cancel` | |
-| `POST` | `/creative/videos/jobs/{id}/cancel` | Asks the provider to stop |
+| `POST` | `/creative/videos/jobs/{id}/cancel` | Asks the provider to stop; a refusal returns 502 and leaves the job as it was |
 
 ### Errors
 
@@ -522,6 +541,7 @@ stack traces are never exposed.
 | `INVALID_CAMPAIGN_STATE` | 409 | e.g. approving an already-decided campaign |
 | `AI_GENERATION_FAILED` | 502 | The AI provider did not return a valid response |
 | `CAMPAIGN_GENERATION_FAILED` | 502 | The pipeline failed; the run records why |
+| `MEDIA_CANCELLATION_FAILED` | 502 | The provider refused to cancel; the job keeps its real state |
 | `MEDIA_PROVIDER_NOT_CONFIGURED` | 503 | No provider for the requested media |
 | `STORAGE_UNAVAILABLE` | 503 | Storage outage, distinct from a missing file |
 
@@ -629,13 +649,16 @@ python -m app.worker
 
 ```bash
 # Backend suite
-cd apps/api && python -m pytest -q                      # 643 passed
+cd apps/api && python -m pytest -q                      # 647 passed
 
 # Fresh PostgreSQL 16
 alembic upgrade head && alembic check                   # no drift
 
 # End to end, through the queue and the real worker
 python scripts/verify_p2a_e2e.py
+
+# The vendor seam: adapters, media chain, cancellation, REAL/DEMO/NOT_CONFIGURED
+python scripts/verify_real_media.py                     # exit 3 = no vendor key
 ```
 
 `verify_p2a_e2e.py` drives HTTP requests, lets `app.worker.Worker` drain the
@@ -652,14 +675,21 @@ Results in this environment (no vendor credentials present):
 |---|---|
 | PG16, `IMAGE_PROVIDER=demo`, `VIDEO_PROVIDER=none` | 57/57 checks passed |
 | PG16, both providers unset | 36/36 checks passed, everything `NOT_CONFIGURED` |
+| `verify_real_media.py`, no vendor key | 65/65 checks passed, exit 3 (vendor round trip skipped) |
 
-Test files — 35 tests across three files, plus parametrized cases added to the
-authorization coverage guard, taking the suite from 581 to 643:
+`verify_real_media.py` covers what a unit test cannot: which provider the factory
+actually resolves, the exact URL and auth scheme each adapter puts on the wire,
+and the cancellation contract. Without credentials it substitutes a local
+stand-in for the vendor HTTP API and says so in its exit code, so a passing run
+is never mistaken for a working vendor.
+
+Test files — 39 tests across three files, plus parametrized cases added to the
+authorization coverage guard, taking the suite from 581 to 647:
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/test_campaign_generation.py` | 14 | Options, generation end to end, metering, idempotency, clamping, variations, regeneration, approval, rejection, listing, archiving |
-| `tests/test_campaign_media_pipeline.py` | 12 | Provider failure, non-image bytes, storage failure, unreadable upload, duplicate delivery, cross-tenant jobs, async video, cancellation |
+| `tests/test_campaign_media_pipeline.py` | 16 | Provider failure, non-image bytes, storage failure, unreadable upload, duplicate delivery, cross-tenant jobs, async video, cancellation incl. a refused provider cancellation |
 | `tests/test_campaign_generation_security.py` | 9 | Cross-tenant reads and writes, unauthenticated access, viewer and member restrictions, admin approval |
 
 ---
@@ -668,23 +698,30 @@ authorization coverage guard, taking the suite from 581 to 643:
 
 1. **Real vendor generation is unverified here.** No image or video vendor key
    exists in this environment. The adapters, storage path, job pipeline,
-   authorization and every failure branch are tested, but the round trip to
-   OpenAI Images and Replicate has not been executed. Tracked as P2-A-1.
-2. **Publishing is not implemented.** By design. `READY_TO_PUBLISH` means a human
+   authorization and every failure branch are tested, and `verify_real_media.py`
+   additionally proves the request each adapter builds and the cancellation
+   contract, but the round trip to OpenAI Images and Replicate has not been
+   executed. Tracked as P2-A-1.
+2. **A generation the provider will not cancel keeps running.** When the vendor
+   refuses cancellation the job is left in its real state and the caller gets
+   `MEDIA_CANCELLATION_FAILED`; the render finishes and is billed. That is
+   deliberate — the alternative is a database that says `CANCELLED` while the
+   vendor meter runs — but it means "cancel" is a request, not a guarantee.
+3. **Publishing is not implemented.** By design. `READY_TO_PUBLISH` means a human
    approved a proposal, not that anything reached an ad platform.
-3. **No media retention policy.** Generated bytes accumulate; archiving is
+4. **No media retention policy.** Generated bytes accumulate; archiving is
    deliberately soft so an ad is never orphaned, but archived objects stay
    billable. Tracked as P2-A-2.
-4. **Two campaign-creation paths coexist.** `/campaign-builder` (P1) and
+5. **Two campaign-creation paths coexist.** `/campaign-builder` (P1) and
    `/ai-campaigns` (P2-A) both write `campaigns`. Tracked as P2-A-3.
-5. **Cost per run is not attributed.** Usage counts events, not provider tokens
+6. **Cost per run is not attributed.** Usage counts events, not provider tokens
    or per-image cost, so margin per campaign cannot be computed. Tracked as
    P2-A-4.
-6. **Progress is polled, not pushed.** The client polls every 2–4 seconds; a
+7. **Progress is polled, not pushed.** The client polls every 2–4 seconds; a
    WebSocket would be cheaper at scale (P3-6).
-7. **`aspect_ratio` is advisory for some providers.** Not every vendor honours an
+8. **`aspect_ratio` is advisory for some providers.** Not every vendor honours an
    exact ratio; the stored `width`/`height` reflect what was actually returned,
    not what was requested.
-8. **Concept quality depends on stored client context.** A client record with no
+9. **Concept quality depends on stored client context.** A client record with no
    products, audience or brand voice yields a thin strategy — correctly, with the
    gaps listed in `data_limitations` rather than filled in with invention.

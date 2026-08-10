@@ -797,10 +797,19 @@ implemented — they are not security fixes required by the above):
 The provider adapters, storage write, retrieval, authorization and every failure
 path are tested, but no vendor API key exists in this environment, so the round
 trip to OpenAI Images and Replicate is **unverified**. Run
-`apps/api/scripts/verify_p2a_e2e.py` in an environment with
-`IMAGE_PROVIDER=openai` and `VIDEO_PROVIDER=replicate` set; it reports the
-provider it actually used and refuses to describe demo output as real. Until then
-no claim of working vendor generation may be made.
+`apps/api/scripts/verify_real_media.py` (or `verify_p2a_e2e.py` for the full
+pipeline) in an environment with `IMAGE_PROVIDER=openai` and
+`VIDEO_PROVIDER=replicate` set; it reports the provider it actually used, exits 3
+when a vendor round trip was skipped, and refuses to describe demo output as
+real. Until then no claim of working vendor generation may be made.
+
+The verification run found one real defect, now fixed: a video cancellation that
+the provider **refused** was still being recorded as `CANCELLED` locally. The
+provider's answer now decides the local state — a refusal leaves the job exactly
+as it was and returns `502 MEDIA_CANCELLATION_FAILED`, because a local
+`CANCELLED` on a generation that is still running and billing is the one state
+nobody can recover from. Four regression tests cover the refusal, an unsupported
+cancel, a completed job (provider not called) and a cross-tenant attempt.
 
 ### P2-A-2 · Decide the retention policy for generated media — **S**
 Every generation writes to object storage and nothing prunes it. Concepts and

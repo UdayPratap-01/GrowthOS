@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import get_settings
+from app.core.errors import ProviderError
 from app.core.mode import effective_demo_mode
 from app.generation import get_image_provider, get_video_provider
 from app.generation.media_utils import detect_image_mime, detect_video_mime, is_valid_image, is_valid_video, parse_aspect_ratio
@@ -270,11 +271,17 @@ class MediaGenerationService:
         """
         Cancel a media job that has not finished.
 
-        For video the provider is asked first: a generation still running at the
-        provider keeps costing money, so recording a local cancellation without
-        telling the provider would save nothing. A provider that cannot cancel is
-        reported as such and the job is still marked cancelled locally, because
-        the user's intent — do not use this asset — is still honoured.
+        For video the provider is asked first, and its answer decides the local
+        state. A generation still running at the provider keeps costing money, so
+        recording CANCELLED locally after a refused cancellation would produce the
+        worst possible state: a job nobody is watching that is still billing. The
+        refusal is surfaced as a structured error and the job is left exactly as
+        it was, so the truth remains visible and the caller can retry or let the
+        generation finish.
+
+        An already-finished job returns without asking the provider — there is
+        nothing running to stop, and a needless call could be rejected and read
+        as a failure.
         """
         model = ImageJob if kind == "image" else VideoJob
         job = await self.db.scalar(
@@ -301,6 +308,20 @@ class MediaGenerationService:
                     organization_id=organization_id,
                     status="CANCEL_FAILED",
                     error=outcome.error,
+                )
+                # Nothing has been written, so there is nothing to roll back and
+                # the job keeps its real state. Only the provider's mapped error
+                # code travels back — its raw response body is logged, never
+                # returned, because a provider body can echo request content.
+                raise ProviderError(
+                    "The provider refused to cancel this generation, so it may still be "
+                    "running. The job has been left in its current state.",
+                    code="MEDIA_CANCELLATION_FAILED",
+                    details={
+                        "job_status": _api_status(job.status),
+                        "provider": job.provider,
+                        "provider_error_code": outcome.error_code or "CANCEL_REFUSED",
+                    },
                 )
 
         job.status = JobStatus.cancelled

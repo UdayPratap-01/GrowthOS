@@ -19,7 +19,9 @@ storage/
 storage_test_media/
 storage_test_media_unit/
 storage_test_campaign/
+storage_test_p2a_security/
 storage_verify_p2a/
+storage_verify_real_media/
 media/
 apps/api/storage/
 apps/api/media/

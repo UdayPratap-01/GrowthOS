@@ -42,7 +42,7 @@ from app.generation.base import (  # noqa: E402
 )
 from app.generation.media_utils import make_demo_png  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.automation import ImageJob, VideoJob  # noqa: E402
+from app.models.automation import CreativeAsset, ImageJob, VideoJob  # noqa: E402
 from app.models.client import Client  # noqa: E402
 from app.models.enums import JobStatus, MemberRole  # noqa: E402
 from app.models.organization import Organization, OrganizationMember  # noqa: E402
@@ -171,6 +171,49 @@ class AsyncVideoProvider(VideoGenerationProvider):
             message="Provider confirmed cancellation.",
             external_id=provider_job_id,
         )
+
+
+class RefusingCancelVideoProvider(AsyncVideoProvider):
+    """
+    Submits normally but will not cancel.
+
+    Models the real Replicate answer for a prediction it declines to stop (409),
+    and by extension every provider that reports a failed cancellation.
+    """
+
+    name = "fake-refusing-cancel"
+
+    def __init__(self, *, error_code: str = "HTTP_409", body: str = "cannot cancel this prediction") -> None:
+        super().__init__()
+        self.error_code = error_code
+        self.body = body
+
+    async def cancel(self, provider_job_id: str):
+        self.cancelled.append(provider_job_id)
+        return GenerationResult(
+            success=False,
+            status="failed",
+            provider=self.name,
+            message="Provider refused the cancellation",
+            error=self.body,
+            error_code=self.error_code,
+            external_id=provider_job_id,
+        )
+
+
+class NoCancelSupportVideoProvider(AsyncVideoProvider):
+    """
+    Inherits the base refusal: a provider with no cancel endpoint at all.
+
+    Distinct from a refusal, and treated the same way, because in both cases the
+    generation may still be running and we cannot claim otherwise.
+    """
+
+    name = "fake-no-cancel-support"
+
+    async def cancel(self, provider_job_id: str):
+        self.cancelled.append(provider_job_id)
+        return await VideoGenerationProvider.cancel(self, provider_job_id)
 
 
 class RefusingStorage:
@@ -510,6 +553,150 @@ async def test_a_provider_without_cancel_support_says_so():
     outcome = await DemoImageProvider().cancel("anything")
     assert outcome.success is False
     assert outcome.error_code == "CANCEL_NOT_SUPPORTED"
+
+
+# --------------------------------------------------------------------------
+# Cancellation failure semantics
+#
+# The rule these protect: local state may only say CANCELLED when the provider
+# confirmed it stopped. A refused cancellation that we recorded as CANCELLED
+# would produce the one state nobody can recover from — a generation still
+# running and billing, that nothing in the product is watching any more.
+# --------------------------------------------------------------------------
+
+
+async def _submitted_video(monkeypatch, provider) -> tuple[str, uuid.UUID, uuid.UUID]:
+    """A live video job at the provider: submitted, not finished, cancellable."""
+    monkeypatch.setattr(
+        "app.services.media_generation_service.get_video_provider", lambda: provider
+    )
+    email, org_id, client_id = await _org_and_client()
+    async with AsyncSessionLocal() as db:
+        organization = await db.get(Organization, org_id)
+        submitted = await MediaGenerationService(db).enqueue_video(
+            organization, client_id=client_id, prompt="a clinic tour"
+        )
+        await db.commit()
+    assert submitted["status"] in {"SUBMITTED", "PROCESSING"}
+    return email, org_id, uuid.UUID(submitted["job_id"])
+
+
+@pytest.mark.asyncio
+async def test_a_refused_cancellation_does_not_pretend_the_job_is_cancelled(monkeypatch):
+    provider = RefusingCancelVideoProvider()
+    email, org_id, job_id = await _submitted_video(monkeypatch, provider)
+
+    async with AsyncSessionLocal() as db:
+        before = await db.get(VideoJob, job_id)
+        status_before = before.status
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=60.0) as http:
+        headers = await _login(http, email)
+        refused = await http.post(f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=headers)
+
+    assert refused.status_code == 502, refused.text
+    # The existing error envelope, unchanged: code, message, request_id and the
+    # error's own details flattened alongside them.
+    body = refused.json()["error"]
+    assert body["code"] == "MEDIA_CANCELLATION_FAILED"
+    assert body["request_id"]
+    assert body["provider_error_code"] == "HTTP_409"
+    assert body["job_status"] == status_before.value.upper()
+    # The provider's own words stay in the log. A response body can echo request
+    # content, and this endpoint is reachable by any member.
+    assert "cannot cancel this prediction" not in refused.text
+
+    # Asked exactly once. A retry is the caller's decision, not a loop.
+    assert provider.cancelled == ["prov-job-123"]
+
+    async with AsyncSessionLocal() as db:
+        job = await db.get(VideoJob, job_id)
+        assert job.status == status_before, "a refused cancellation must not change local state"
+        assert job.status != JobStatus.cancelled
+        assert job.creative_asset_id is None
+        # Nothing was generated, so nothing may be charged.
+        assert await UsageService(db).total(org_id, Metric.VIDEO_GENERATION) == 0
+        assets = (await db.execute(select(CreativeAsset).where(CreativeAsset.organization_id == org_id))).scalars().all()
+        assert assets == [], "no asset may appear for a cancellation that did not happen"
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_cannot_cancel_leaves_the_job_running(monkeypatch):
+    """
+    Not a refusal but the same conclusion.
+
+    A provider with no cancel endpoint cannot stop the render, so recording
+    CANCELLED would misreport a generation that is still being billed.
+    """
+    provider = NoCancelSupportVideoProvider()
+    email, _, job_id = await _submitted_video(monkeypatch, provider)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=60.0) as http:
+        headers = await _login(http, email)
+        refused = await http.post(f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=headers)
+
+    assert refused.status_code == 502, refused.text
+    assert refused.json()["error"]["code"] == "MEDIA_CANCELLATION_FAILED"
+    assert refused.json()["error"]["provider_error_code"] == "CANCEL_NOT_SUPPORTED"
+    assert provider.cancelled == ["prov-job-123"]
+
+    async with AsyncSessionLocal() as db:
+        job = await db.get(VideoJob, job_id)
+        assert job.status != JobStatus.cancelled
+        assert job.error is None, "a failed cancellation is not a failed generation"
+
+
+@pytest.mark.asyncio
+async def test_a_completed_video_stays_completed_and_the_provider_is_not_asked(monkeypatch):
+    provider = AsyncVideoProvider()
+    email, org_id, job_id = await _submitted_video(monkeypatch, provider)
+
+    async with AsyncSessionLocal() as db:
+        service = MediaGenerationService(db)
+        await service.get_video_job(org_id, job_id, poll=True)
+        final = await service.get_video_job(org_id, job_id, poll=True)
+        await db.commit()
+    assert final["status"] == "COMPLETED"
+    provider.cancelled.clear()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=60.0) as http:
+        headers = await _login(http, email)
+        response = await http.post(f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "COMPLETED"
+    assert "already finished" in response.json()["message"]
+    # Nothing is running, so nothing is asked — a needless call could be refused
+    # and read as a failure.
+    assert provider.cancelled == []
+
+    async with AsyncSessionLocal() as db:
+        job = await db.get(VideoJob, job_id)
+        assert job.status == JobStatus.completed
+        assert job.creative_asset_id is not None
+
+
+@pytest.mark.asyncio
+async def test_another_organization_cannot_cancel_and_the_provider_is_never_asked(monkeypatch):
+    provider = RefusingCancelVideoProvider()
+    _, _, job_id = await _submitted_video(monkeypatch, provider)
+    intruder_email, _, _ = await _org_and_client()
+
+    async with AsyncSessionLocal() as db:
+        status_before = (await db.get(VideoJob, job_id)).status
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=60.0) as http:
+        headers = await _login(http, intruder_email)
+        response = await http.post(f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=headers)
+
+    # 404 rather than 403: a "forbidden" would confirm the job exists.
+    assert response.status_code == 404, response.text
+    assert provider.cancelled == [], "a foreign request must not reach the provider"
+
+    async with AsyncSessionLocal() as db:
+        job = await db.get(VideoJob, job_id)
+        assert job.status == status_before
+        assert job.status != JobStatus.cancelled
 
 
 # --------------------------------------------------------------------------

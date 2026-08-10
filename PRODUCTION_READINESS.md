@@ -486,7 +486,8 @@ change that.** It adds no payment processing and no ad publishing. What it adds 
 the ability to turn a client's stored context into a complete, reviewable campaign
 package that a human must approve before anything further happens.
 
-**Test count: 581 → 643**, green on SQLite and on PostgreSQL 16 with the
+**Test count: 581 → 647** (643 at the P2-A checkpoint, plus 4 from the P2-A-1
+cancellation fix below), green on SQLite and on PostgreSQL 16 with the
 Alembic-migrated schema. Frontend typecheck, lint and production build green.
 
 ### What was built
@@ -547,6 +548,27 @@ this report does **not** claim that image or video generation works against a
 real vendor. The provider adapters, storage path, job pipeline, authorization and
 failure handling are tested; the vendor round trip is untested here and must be
 verified in an environment that has credentials.
+
+### P2-A-1 — real-provider verification and the defect it found
+
+`apps/api/scripts/verify_real_media.py` tests the seam between the adapters and
+the vendor APIs: provider resolution, the exact outbound request each adapter
+builds, the media chain through to an authorized download, cancellation, and the
+REAL / DEMO / NOT_CONFIGURED labelling. With no vendor credentials present it
+runs against a local stand-in of the vendor HTTP API and **exits 3** to say so —
+65/65 checks passed, and **no claim is made about OpenAI or Replicate**.
+
+It found one real defect, now fixed. A video cancellation that the provider
+*refused* (Replicate answers 409 for a prediction it will not stop) was still
+recorded as `CANCELLED` locally. That is the worst available state: a generation
+still running and still billing at the vendor, with nothing in the product
+watching it. The provider's answer now decides the local state — a refusal, or a
+provider with no cancel endpoint, leaves the job exactly as it was and returns
+`502 MEDIA_CANCELLATION_FAILED` through the existing error envelope. The
+refusal is logged as a `CANCEL_FAILED` media event with the provider's message;
+the response carries only the mapped error code, because a provider response
+body can echo request content. An already-finished job is not sent to the
+provider at all.
 
 ### Migration drift corrected
 
