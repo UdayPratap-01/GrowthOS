@@ -42,7 +42,7 @@ async def test_tenant_isolation_on_actions_and_clients():
             },
         )
         assert nocost.status_code == 400
-        assert "BUDGET_REQUIRED" in nocost.json()["detail"]
+        assert nocost.json()["error"]["code"] == "BUDGET_REQUIRED"
 
 
 @pytest.mark.asyncio

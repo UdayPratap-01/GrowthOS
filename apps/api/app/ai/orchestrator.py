@@ -52,7 +52,16 @@ class AIOrchestrator:
     async def generate_content(self, context: ClientContext, request: ContentGenerateRequest) -> ContentGenerated:
         return await self.content_agent.run(context, request)
 
-    async def score_lead(self, context: ClientContext, request: LeadScoreRequest) -> LeadScoreExplanation:
+    def score_lead_deterministic(
+        self, context: ClientContext, request: LeadScoreRequest
+    ) -> LeadScoreExplanation:
+        """
+        Score a lead with the deterministic rule engine.
+
+        Deliberately not an LLM call: the system holds no behavioural signals to
+        reason over, so a model could only speculate. Naming it `score_lead`
+        alongside the other agent methods implied AI scoring that never ran.
+        """
         return self.lead_agent.deterministic_score(request)
 
     async def analytics_insight(self, context: ClientContext, question: str) -> AnalyticsInsight:

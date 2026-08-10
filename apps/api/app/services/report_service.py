@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import io
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -9,7 +12,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.orchestrator import get_orchestrator
+from app.services.usage_service import Metric, meter
 from app.core.config import get_settings
+from app.storage import (
+    StorageError,
+    StorageUnavailableError,
+    build_key,
+    get_object_storage,
+    key_belongs_to_organization,
+)
+
+logger = logging.getLogger(__name__)
 from app.models.ai_ops import Report
 from app.models.marketing import Campaign, SocialPost
 from app.models.organization import Organization
@@ -185,7 +198,7 @@ class ReportService:
         )
         self.db.add(report)
         await self.db.flush()
-        report.export_path = self._write_pdf(report)
+        report.export_path = await self._store_pdf(organization.id, client_id, report)
         await write_audit(
             self.db,
             action="report.generate",
@@ -194,33 +207,69 @@ class ReportService:
             resource_type="report",
             resource_id=str(report.id),
         )
+        await meter(
+            self.db,
+            organization_id=organization.id,
+            metric=Metric.REPORT_GENERATION,
+            idempotency_key=f"report:{report.id}",
+            client_id=client_id,
+        )
         await self.db.flush()
         await self.db.refresh(report)
         out = ReportOut.model_validate(report)
         out.data_source = analytics.data_source
         return out
 
-    def _write_pdf(self, report: Report) -> str:
-        settings = get_settings()
-        out_dir = Path(settings.storage_local_path) / "reports"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{report.id}.pdf"
+    async def _store_pdf(self, organization_id: UUID, client_id: UUID, report: Report) -> str | None:
+        """
+        Render the report and persist it through the storage abstraction.
+
+        Reports used to be written straight to `STORAGE_LOCAL_PATH/reports`,
+        which meant every historical export vanished on redeploy. The returned
+        value is now a storage key, not a filesystem path.
+
+        A failed upload returns None: the report row itself is still valid data,
+        so the correct behaviour is "no export available" rather than losing the
+        report or claiming a download that will 404.
+        """
+        rendered = await asyncio.to_thread(self._render_pdf, report)
+        if rendered is None:
+            return None
+        data, content_type, extension = rendered
+
+        key = build_key(
+            organization_id=organization_id,
+            client_id=client_id,
+            kind="reports",
+            filename=f"{report.id}.{extension}",
+        )
+        try:
+            storage = get_object_storage()
+            await storage.upload(data, key, content_type)
+            if not await storage.exists(key):
+                raise StorageUnavailableError("Object missing immediately after upload")
+        except StorageError as exc:
+            logger.error("Report export upload failed report_id=%s key=%s", report.id, key, exc_info=exc)
+            return None
+        return key
+
+    def _render_pdf(self, report: Report) -> tuple[bytes, str, str] | None:
+        """Render to bytes in memory. Returns (data, content_type, extension)."""
         body = report.content or {}
 
         try:
             from reportlab.lib.pagesizes import letter
             from reportlab.pdfgen import canvas
         except ImportError:
-            text_path = out_dir / f"{report.id}.txt"
-            text_path.write_text(
+            text = (
                 f"{report.title}\n{report.period_start} to {report.period_end}\n\n"
                 f"Executive summary:\n{body.get('executive_summary', '')}\n\n"
-                f"Next week:\n{body.get('next_week_strategy', '')}\n",
-                encoding="utf-8",
+                f"Next week:\n{body.get('next_week_strategy', '')}\n"
             )
-            return str(text_path)
+            return text.encode("utf-8"), "text/plain", "txt"
 
-        c = canvas.Canvas(str(path), pagesize=letter)
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=letter)
         width, height = letter
         y = height - 50
         c.setFont("Helvetica-Bold", 14)
@@ -252,9 +301,37 @@ class ReportService:
                 y -= 13
             y -= 10
         c.save()
-        return str(path)
+        return buffer.getvalue(), "application/pdf", "pdf"
 
-    def resolve_export_path(self, organization_id: UUID, client_id: UUID, report_id: UUID) -> Path:
-        # Path validated after DB ownership check in the route.
-        settings = get_settings()
-        return Path(settings.storage_local_path) / "reports" / f"{report_id}.pdf"
+    async def load_export(
+        self, organization_id: UUID, client_id: UUID, report: Report | ReportOut
+    ) -> tuple[bytes, str, str]:
+        """
+        Fetch a stored export.
+
+        Raises HTTPException-friendly `StorageError` / `FileNotFoundError` so the
+        route can distinguish "never exported" and "storage is down" from
+        "the file is genuinely gone".
+        """
+        key = report.export_path
+        if not key:
+            raise FileNotFoundError("Report has no export")
+        if not key_belongs_to_organization(key, organization_id):
+            # Legacy rows hold absolute local paths from before exports moved into
+            # object storage. Serve them from disk once; they are not re-created.
+            legacy = Path(key)
+            if legacy.is_file():
+                suffix = legacy.suffix.lstrip(".") or "pdf"
+                media = "application/pdf" if suffix == "pdf" else "text/plain"
+                return legacy.read_bytes(), media, suffix
+            raise FileNotFoundError("Report export is not owned by this organization")
+
+        storage = get_object_storage()
+        data = await storage.get_bytes(key)
+        if data is None:
+            raise FileNotFoundError("Report export missing from storage")
+        extension = key.rsplit(".", 1)[-1] if "." in key else "pdf"
+        media = await storage.content_type(key) or (
+            "application/pdf" if extension == "pdf" else "text/plain"
+        )
+        return data, media, extension

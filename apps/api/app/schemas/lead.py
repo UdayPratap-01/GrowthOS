@@ -29,9 +29,23 @@ class LeadUpdate(BaseModel):
 
 
 class LeadScoreExplanation(BaseModel):
-    score: int
+    """
+    A lead score and the exact basis for it.
+
+    `method` states how the score was produced so the UI never implies an LLM
+    was involved when it was not.
+    """
+
+    score: int = Field(ge=0, le=100)
+    # deterministic_rules — a transparent rule engine, not an LLM.
+    method: str = "deterministic_rules"
+    method_label: str = "Deterministic rule-based scoring"
     reasons: list[str]
-    based_on_available_data_only: bool
+    # The concrete field values the score was computed from. Never inferred behaviour.
+    evidence: list[str] = Field(default_factory=list)
+    # What could not be assessed because the data does not exist.
+    data_limitations: list[str] = Field(default_factory=list)
+    based_on_available_data_only: bool = True
     insufficient_data_note: str | None = None
 
 

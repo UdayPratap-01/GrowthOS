@@ -139,6 +139,11 @@ class CreativeAsset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_asset_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(64), default="draft")
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -154,16 +159,27 @@ class ImageJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     client_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=True
     )
+    campaign_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
+    )
     creative_asset_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("creative_assets.id", ondelete="SET NULL"), nullable=True
     )
     provider: Mapped[str] = mapped_column(String(64), default="none")
+    provider_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    aspect_ratio: Mapped[str] = mapped_column(String(16), default="1:1")
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="image_job_status", native_enum=False), default=JobStatus.queued
     )
     result: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class VideoJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -175,16 +191,26 @@ class VideoJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     client_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=True
     )
+    campaign_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True
+    )
     creative_asset_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("creative_assets.id", ondelete="SET NULL"), nullable=True
     )
     provider: Mapped[str] = mapped_column(String(64), default="none")
+    provider_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    aspect_ratio: Mapped[str] = mapped_column(String(16), default="9:16")
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=10)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="video_job_status", native_enum=False), default=JobStatus.queued
     )
     result: Mapped[dict] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ScheduledPost(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -282,6 +308,9 @@ class BackgroundJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
     )
     job_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    # Idempotency: enqueuing twice with the same key returns the first job
+    # instead of duplicating the work. Unique so a race loses at the database.
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True, index=True)
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="background_job_status", native_enum=False), default=JobStatus.queued, index=True
     )
@@ -293,6 +322,12 @@ class BackgroundJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     run_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Lease fields. A running job is owned by exactly one worker until its lease
+    # expires; an expired lease means the worker died and the job is reclaimable.
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AutopilotRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):

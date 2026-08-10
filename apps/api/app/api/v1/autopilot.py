@@ -3,8 +3,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings as app_settings
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import ai_limit, campaign_execution_limit, media_limit
 from app.models.enums import AIActionStatus, AIActionType, Priority, RiskLevel
 from app.schemas.autopilot import (
     AIActionCreate,
@@ -54,7 +57,7 @@ async def get_settings(
 async def update_settings(
     data: AutonomySettingsUpdate,
     client_id: UUID | None = Query(default=None),
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.autonomy_manage)),
     db: AsyncSession = Depends(get_db),
 ) -> AutonomySettingsOut:
     return await AutonomyService(db).update(auth.organization_id, data, client_id)
@@ -81,7 +84,9 @@ async def list_actions(
 @router.post("/actions", response_model=AIActionOut)
 async def create_action(
     data: AIActionCreate,
-    auth: AuthContext = Depends(get_current_auth),
+    # Members may propose work. Creating an action can reach the execution
+    # engine when autonomy is enabled, so a read-only viewer must not.
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).create(
@@ -103,7 +108,7 @@ async def get_action(
 async def approve_action(
     action_id: UUID,
     data: ActionDecision | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.action_approve)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).approve(auth.organization_id, action_id, auth.user.id, data or ActionDecision())
@@ -113,7 +118,7 @@ async def approve_action(
 async def reject_action(
     action_id: UUID,
     data: ActionDecision | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.action_approve)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).reject(auth.organization_id, action_id, auth.user.id, data or ActionDecision())
@@ -122,7 +127,7 @@ async def reject_action(
 @router.post("/actions/{action_id}/execute", response_model=AIActionOut)
 async def execute_action(
     action_id: UUID,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.action_execute)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).execute(auth.organization_id, action_id, auth.user.id)
@@ -131,7 +136,7 @@ async def execute_action(
 @router.post("/actions/{action_id}/rollback")
 async def rollback_action(
     action_id: UUID,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.action_execute)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await ActionService(db).rollback(auth.organization_id, action_id, auth.user.id)
@@ -146,19 +151,19 @@ async def activity(
     return await ActionService(db).list(auth.organization_id, client_id=client_id, limit=150)
 
 
-@router.post("/decision-loop", response_model=DecisionLoopResult)
+@router.post("/decision-loop", response_model=DecisionLoopResult, dependencies=[Depends(campaign_execution_limit)])
 async def decision_loop(
     data: DecisionLoopRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.autonomous_execution)),
     db: AsyncSession = Depends(get_db),
 ) -> DecisionLoopResult:
     return await OptimizationService(db).run_decision_loop(auth.organization, data, user_id=auth.user.id)
 
 
-@router.post("/campaigns/propose", response_model=AIActionOut)
+@router.post("/campaigns/propose", response_model=AIActionOut, dependencies=[Depends(campaign_execution_limit)])
 async def propose_campaign(
     data: CampaignProposeRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).create(
@@ -184,7 +189,7 @@ async def propose_campaign(
 @router.post("/content/schedule", response_model=AIActionOut)
 async def schedule_content(
     data: ScheduleContentRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).create(
@@ -204,10 +209,10 @@ async def schedule_content(
     )
 
 
-@router.post("/content/publish", response_model=AIActionOut)
+@router.post("/content/publish", response_model=AIActionOut, dependencies=[Depends(campaign_execution_limit)])
 async def publish_content(
     data: PublishContentRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.campaign_publish)),
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).create(
@@ -229,10 +234,10 @@ async def publish_content(
 
 
 # Creative / image / video under autopilot namespace + mirrored paths via creative router
-@router.post("/creative/generate", response_model=list[CreativeAssetOut])
+@router.post("/creative/generate", response_model=list[CreativeAssetOut], dependencies=[Depends(media_limit)])
 async def creative_generate(
     data: CreativeGenerateRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> list[CreativeAssetOut]:
     return await CreativeService(db).generate_concepts(auth.organization, data, user_id=auth.user.id)
@@ -247,19 +252,19 @@ async def creative_assets(
     return await CreativeService(db).list_assets(auth.organization_id, client_id)
 
 
-@router.post("/image/generate")
+@router.post("/image/generate", dependencies=[Depends(media_limit)])
 async def image_generate(
     data: ImageGenerateRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await CreativeService(db).generate_image(auth.organization, data, user_id=auth.user.id)
 
 
-@router.post("/video/generate")
+@router.post("/video/generate", dependencies=[Depends(media_limit)])
 async def video_generate(
     data: VideoGenerateRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await CreativeService(db).generate_video(auth.organization, data, user_id=auth.user.id)
@@ -285,7 +290,7 @@ async def list_rules(
 @router.post("/optimization/rules", response_model=OptimizationRuleOut)
 async def create_rule(
     data: OptimizationRuleIn,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.autonomy_manage)),
     db: AsyncSession = Depends(get_db),
 ) -> OptimizationRuleOut:
     return await OptimizationService(db).create_rule(auth.organization_id, data)
@@ -300,10 +305,10 @@ async def list_events(
     return await OptimizationService(db).list_events(auth.organization_id, client_id)
 
 
-@router.post("/optimization/analyze", response_model=DecisionLoopResult)
+@router.post("/optimization/analyze", response_model=DecisionLoopResult, dependencies=[Depends(ai_limit)])
 async def analyze(
     client_id: UUID = Query(...),
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> DecisionLoopResult:
     return await OptimizationService(db).analyze(auth.organization, client_id, user_id=auth.user.id)
@@ -318,30 +323,73 @@ async def campaign_health(
     return await OptimizationService(db).list_health(auth.organization_id, client_id)
 
 
-@router.post("/jobs/process")
-async def process_jobs(
-    auth: AuthContext = Depends(get_current_auth),
+@router.get("/campaigns/health/summary", dependencies=[Depends(ai_limit)])
+async def campaign_health_summary(
+    client_id: UUID = Query(...),
+    # Reads like a report but calls the AI provider, so it is billed work and
+    # gated with the other spending endpoints rather than with plain reads.
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    from app.jobs.handlers import process_organization_jobs
+    """
+    Written explanation of the health scores from `/campaigns/health`.
+
+    The scores themselves stay arithmetic; this only narrates them, and reports
+    `narrative_available: false` rather than inventing prose if the AI provider
+    is unreachable.
+    """
+    return await OptimizationService(db).health_narrative(auth.organization, client_id)
+
+
+@router.post("/jobs/process", dependencies=[Depends(campaign_execution_limit)])
+async def process_jobs(
+    auth: AuthContext = Depends(require_permission(Permission.campaign_publish)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Ask for this organization's due scheduled posts to be picked up.
+
+    The normal path is: enqueue here, the worker executes. Only a development
+    setup with inline execution runs the work in the request, and even then it
+    is restricted to the caller's own organization — the queue is shared by
+    every tenant, so draining it from a user request would let one customer
+    execute another customer's work with that customer's credentials.
+    """
+    from app.jobs.handlers import enqueue_publish_due, process_organization_jobs
+
+    if not app_settings().should_run_jobs_inline:
+        job = await enqueue_publish_due(db, auth.organization_id)
+        return {
+            "queued": True,
+            "job_id": str(job.id),
+            "status": job.status.value.upper(),
+            "poll_url": f"/api/v1/jobs/{job.id}",
+            "processed": 0,
+            "ids": [],
+            "message": "Queued for the background worker.",
+        }
 
     processed = await process_organization_jobs(db, auth.organization_id)
-    return {"processed": len(processed), "ids": [str(j.id) for j in processed]}
+    return {
+        "queued": True,
+        "processed": len(processed),
+        "ids": [str(j.id) for j in processed],
+    }
 
 
-@router.post("/campaigns/build", response_model=CampaignBuildResult)
+@router.post("/campaigns/build", response_model=CampaignBuildResult, dependencies=[Depends(campaign_execution_limit)])
 async def build_campaign(
     data: CampaignBuildRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.campaign_publish)),
     db: AsyncSession = Depends(get_db),
 ) -> CampaignBuildResult:
     return await CampaignBuildService(db).build_campaign(auth.organization, data, user_id=auth.user.id)
 
 
-@router.post("/run", response_model=AutopilotRunOut)
+@router.post("/run", response_model=AutopilotRunOut, dependencies=[Depends(campaign_execution_limit)])
 async def run_marketing_autopilot(
     data: AutopilotRunRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.autonomous_execution)),
     db: AsyncSession = Depends(get_db),
 ) -> AutopilotRunOut:
     return await CampaignBuildService(db).run_autopilot(auth.organization, data, user_id=auth.user.id)
@@ -368,10 +416,10 @@ async def get_run(
         raise HTTPException(status_code=404, detail="RUN_NOT_FOUND") from None
 
 
-@router.post("/creative/variations")
+@router.post("/creative/variations", dependencies=[Depends(media_limit)])
 async def creative_variations(
     data: CreativeVariationsRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await CampaignBuildService(db).generate_variations(auth.organization, data, user_id=auth.user.id)

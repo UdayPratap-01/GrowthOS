@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.mode import ExecutionMode
 from app.integrations.persistence import get_integration_row
 from app.publishing.base import PublishResult, SocialPublisher
 
@@ -48,10 +49,11 @@ class BaseHonestPublisher(SocialPublisher):
             return PublishResult(
                 success=True,
                 status="demo_simulated",
-                message="DEMO DATA — publish simulated; no live platform post created.",
+                message="DEMO EXECUTION — publish simulated; no live platform post was created.",
                 external_id=None,
-                platform_response={"note": "DEMO DATA"},
+                platform_response={"note": "DEMO EXECUTION", "execution_mode": "DEMO_EXECUTION"},
                 demo=True,
+                execution_mode=ExecutionMode.demo_execution.value,
             )
         # Live write adapters require platform-specific publish scopes not configured in Phase 5 base.
         return PublishResult(
@@ -59,13 +61,15 @@ class BaseHonestPublisher(SocialPublisher):
             status="not_implemented",
             message=f"{self.platform} live publish requires additional platform publish permissions.",
             error="PUBLISH_NOT_AVAILABLE",
+            execution_mode=ExecutionMode.real_execution.value,
         )
 
     async def schedule(self, *, content: dict, scheduled_for: str, organization_id, client_id) -> PublishResult:
         result = await self.publish(content=content, organization_id=organization_id, client_id=client_id)
         if result.demo:
-            result.message = "DEMO DATA — schedule simulated; no live platform schedule created."
+            result.message = "DEMO EXECUTION — schedule simulated; no live platform schedule created."
             result.status = "demo_scheduled"
+            result.execution_mode = ExecutionMode.demo_execution.value
         return result
 
     async def get_status(self, *, external_id: str, organization_id, client_id) -> PublishResult:

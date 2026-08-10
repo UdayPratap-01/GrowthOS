@@ -43,8 +43,11 @@ export default function LeadScoringPage() {
     <div className="space-y-6 animate-rise">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl">AI Lead Scoring</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">0–100 scores with explanations from available CRM fields only.</p>
+          <h1 className="font-display text-3xl">Lead Scoring</h1>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Deterministic rule-based scoring (0–100). Computed from recorded CRM fields only — no AI model and
+            no inferred browsing, email or form behaviour.
+          </p>
         </div>
         <Select className="w-52" value={clientId} onChange={(e) => setClientId(e.target.value)}>
           <option value="">All clients</option>
@@ -79,13 +82,23 @@ export default function LeadScoringPage() {
                   </div>
                   <Badge tone="accent">{lead.lead_score ?? "—"}/100</Badge>
                 </div>
+                <div className="mt-2 text-xs uppercase tracking-wide text-[var(--muted)]">
+                  {lead.score_explanation?.method_label || "Deterministic rule-based scoring"}
+                </div>
                 <ul className="mt-2 list-disc pl-5 text-sm text-[var(--muted)]">
                   {(lead.score_explanation?.reasons || ["Insufficient data."]).map((r) => (
                     <li key={r}>{r}</li>
                   ))}
                 </ul>
-                {lead.score_explanation?.insufficient_data_note ? (
-                  <p className="mt-2 text-xs text-[var(--muted)]">{lead.score_explanation.insufficient_data_note}</p>
+                {lead.score_explanation?.data_limitations?.length ? (
+                  <div className="mt-2">
+                    <div className="text-xs font-medium text-[var(--muted)]">Not assessed</div>
+                    <ul className="list-disc pl-5 text-xs text-[var(--muted)]">
+                      {lead.score_explanation.data_limitations.map((d) => (
+                        <li key={d}>{d}</li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : null}
               </div>
             ))}

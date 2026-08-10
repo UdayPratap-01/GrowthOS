@@ -37,7 +37,7 @@ async def test_autonomy_settings_and_action_approval_flow():
             },
         )
         assert over.status_code == 400
-        assert "BUDGET" in over.json()["detail"]
+        assert "BUDGET" in over.json()["error"]["code"]
 
         created = await client.post(
             "/api/v1/autopilot/actions",
@@ -93,11 +93,17 @@ async def test_decision_loop_creates_structured_actions():
         assert "actions_created" in body
         assert body["actions_created"] >= 0
 
-        # Image provider honest failure when not configured
+        # Image provider: honest NOT CONFIGURED, or real file when demo/openai configured
         img = await client.post(
             "/api/v1/autopilot/image/generate",
             headers=headers,
             json={"client_id": client_id, "prompt": "brand ad visual"},
         )
         assert img.status_code == 200
-        assert "IMAGE GENERATION NOT CONFIGURED" in (img.json().get("message") or img.json().get("error") or "")
+        body = img.json()
+        msg = f"{body.get('message') or ''} {body.get('error') or ''} {body.get('status') or ''}"
+        assert (
+            "IMAGE GENERATION NOT CONFIGURED" in msg
+            or body.get("status") == "COMPLETED"
+            or "DEMO" in msg
+        )

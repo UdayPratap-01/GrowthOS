@@ -22,6 +22,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (mounted) setUser(me);
       } catch {
         clearTokens();
+        if (mounted) setUser(null);
         router.replace(`/login?next=${encodeURIComponent(pathname)}`);
       } finally {
         if (mounted) setLoading(false);
@@ -32,7 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [pathname, router]);
 
-  if (loading) {
+  if (loading || !user) {
     return (
       <div className="flex min-h-screen bg-[var(--canvas)]">
         <div className="w-[260px] border-r border-[var(--line)] p-4">

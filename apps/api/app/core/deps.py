@@ -11,6 +11,7 @@ from app.core.security import safe_decode_token
 from app.db.session import get_db
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
+from app.observability.logging import bind_request_context
 from app.security.rate_limit import rate_limit_dependency
 
 bearer = HTTPBearer(auto_error=False)
@@ -66,4 +67,9 @@ async def get_current_auth(
     if not membership:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No organization membership")
 
+    # Bind tenant identity so every subsequent log line in this request is
+    # attributable without threading the context through call signatures.
+    bind_request_context(
+        organization_id=str(membership.organization_id), user_id=str(user.id)
+    )
     return AuthContext(user=user, organization=membership.organization, membership=membership)

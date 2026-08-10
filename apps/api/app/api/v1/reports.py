@@ -1,12 +1,20 @@
-from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.jobs.queue import JobQueue
+from app.jobs.registry import REPORT_GENERATE
+from app.schemas.jobs import JobAcceptedOut
+from app.storage import StorageError
+
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import report_limit
+from app.security.quota import requires_quota
+from app.services.usage_service import Metric
 from app.schemas.report import ReportGenerateRequest, ReportOut
 from app.services.report_service import ReportService
 
@@ -22,16 +30,56 @@ async def list_reports(
     return await ReportService(db).list(auth.organization_id, client_id)
 
 
-@router.post("/generate", response_model=ReportOut)
+@router.post(
+    "/generate",
+    response_model=ReportOut,
+    dependencies=[Depends(report_limit), Depends(requires_quota(Metric.REPORT_GENERATION))],
+)
 async def generate_report(
     client_id: UUID,
     data: ReportGenerateRequest | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> ReportOut:
     period_days = data.period_days if data else 7
     return await ReportService(db).generate(
         auth.organization, auth.user_id, client_id, period_days=period_days
+    )
+
+
+@router.post(
+    "/generate/async",
+    response_model=JobAcceptedOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(report_limit), Depends(requires_quota(Metric.REPORT_GENERATION))],
+)
+async def generate_report_async(
+    client_id: UUID,
+    data: ReportGenerateRequest | None = None,
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
+    db: AsyncSession = Depends(get_db),
+) -> JobAcceptedOut:
+    """
+    Hand report generation to a worker.
+
+    Reports call the AI provider and render a PDF, so a large period can take
+    long enough to hit a proxy timeout. Callers that cannot wait use this and
+    poll `/api/v1/jobs/{job_id}`.
+    """
+    job = await JobQueue(db).enqueue(
+        job_type=REPORT_GENERATE,
+        payload={
+            "client_id": str(client_id),
+            "user_id": str(auth.user_id),
+            "period_days": (data.period_days if data else 7),
+        },
+        organization_id=auth.organization_id,
+    )
+    await db.commit()
+    return JobAcceptedOut(
+        job_id=job.id,
+        poll_url=f"/api/v1/jobs/{job.id}",
+        message="Report generation queued. Poll the job for completion.",
     )
 
 
@@ -51,19 +99,28 @@ async def download_report_pdf(
     report_id: UUID,
     auth: AuthContext = Depends(get_current_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> Response:
     service = ReportService(db)
     report = await service.get(auth.organization_id, client_id, report_id)
-    if not report.export_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDF export not available")
-    path = Path(report.export_path)
-    if not path.exists():
-        # try regenerated conventional path
-        path = service.resolve_export_path(auth.organization_id, client_id, report_id)
-        if not path.exists():
-            txt = path.with_suffix(".txt")
-            if txt.exists():
-                return FileResponse(txt, filename=f"growthos-report-{report_id}.txt", media_type="text/plain")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export file missing")
-    media = "application/pdf" if path.suffix == ".pdf" else "text/plain"
-    return FileResponse(path, filename=f"growthos-report-{report_id}{path.suffix}", media_type=media)
+    try:
+        data, media_type, extension = await service.load_export(
+            auth.organization_id, client_id, report
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="PDF export not available"
+        ) from exc
+    except StorageError as exc:
+        # The export exists; storage is simply unreachable. A 404 here would tell
+        # the user their report is gone.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="STORAGE_UNAVAILABLE"
+        ) from exc
+
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="growthos-report-{report_id}.{extension}"'
+        },
+    )

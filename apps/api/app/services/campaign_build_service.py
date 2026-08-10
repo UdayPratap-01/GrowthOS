@@ -130,26 +130,52 @@ class CampaignBuildService:
                 count=data.image_quantity,
             ),
         )
+        from app.services.media_generation_service import MediaGenerationService
+
+        media = MediaGenerationService(self.db)
         image_provider = get_image_provider()
         image_detail = f"{len(image_pack.prompts)} prompts via {image_provider.name}"
-        if not image_provider.configured():
-            image_detail += " — IMAGE GENERATION NOT CONFIGURED"
+        generated_images = 0
         for item in image_pack.prompts[: data.image_quantity]:
-            asset = CreativeAsset(
+            concept = CreativeAsset(
                 organization_id=organization.id,
                 client_id=data.client_id,
                 name=(item.headline_suggestion or item.style)[:255],
                 asset_type="image_concept",
                 platform=data.platforms[0] if data.platforms else None,
                 prompt=item.prompt,
-                provider=image_provider.name,
+                provider="creative_agent",
                 status="draft",
                 content=item.model_dump(),
                 meta={"run_id": str(run.id), "style": item.style},
                 data_source="demo" if demo else "live",
             )
-            self.db.add(asset)
-        self._mark(run, "images", "completed", image_detail)
+            self.db.add(concept)
+            await self.db.flush()
+            if image_provider.configured():
+                gen = await media.enqueue_images(
+                    organization,
+                    client_id=data.client_id,
+                    prompt=item.prompt,
+                    aspect_ratio="1:1",
+                    quantity=1,
+                    platform=data.platforms[0] if data.platforms else None,
+                    idempotency_key=f"build:{run.id}:img:{concept.id}",
+                )
+                if gen.get("status") == "COMPLETED":
+                    generated_images += 1
+            else:
+                image_detail = "IMAGE GENERATION NOT CONFIGURED — concepts stored only"
+        if image_provider.configured():
+            image_detail = f"{generated_images}/{min(len(image_pack.prompts), data.image_quantity)} images stored"
+            self._mark(
+                run,
+                "images",
+                "completed" if generated_images else "blocked",
+                image_detail,
+            )
+        else:
+            self._mark(run, "images", "blocked", image_detail)
 
         video_pack = await orch.video_concepts(
             context,
@@ -162,24 +188,46 @@ class CampaignBuildService:
         )
         video_provider = get_video_provider()
         video_detail = f"{len(video_pack.concepts)} scripts via {video_provider.name}"
-        if not video_provider.configured():
-            video_detail += " — VIDEO GENERATION NOT CONFIGURED"
+        generated_videos = 0
         for concept in video_pack.concepts[: data.video_quantity]:
-            asset = CreativeAsset(
+            row = CreativeAsset(
                 organization_id=organization.id,
                 client_id=data.client_id,
                 name=concept.title[:255],
                 asset_type="video_concept",
                 platform=data.platforms[0] if data.platforms else None,
                 prompt=concept.script,
-                provider=video_provider.name,
+                provider="creative_agent",
                 status="draft",
                 content=concept.model_dump(),
                 meta={"run_id": str(run.id)},
                 data_source="demo" if demo else "live",
             )
-            self.db.add(asset)
-        self._mark(run, "videos", "completed", video_detail)
+            self.db.add(row)
+            await self.db.flush()
+            if video_provider.configured():
+                gen = await media.enqueue_video(
+                    organization,
+                    client_id=data.client_id,
+                    prompt=getattr(concept, "script", None) or concept.title,
+                    aspect_ratio="9:16",
+                    duration_seconds=getattr(concept, "duration_seconds", 10) or 10,
+                    platform=data.platforms[0] if data.platforms else None,
+                    idempotency_key=f"build:{run.id}:vid:{row.id}",
+                )
+                if gen.get("status") == "COMPLETED":
+                    generated_videos += 1
+                elif gen.get("status") in {"SUBMITTED", "PROCESSING", "QUEUED"}:
+                    video_detail = f"Video jobs in progress ({gen.get('status')})"
+            else:
+                video_detail = "VIDEO GENERATION NOT CONFIGURED — concepts stored only"
+        if video_provider.configured():
+            if generated_videos:
+                self._mark(run, "videos", "completed", f"{generated_videos} videos stored")
+            else:
+                self._mark(run, "videos", "blocked", video_detail or "Videos not yet completed")
+        else:
+            self._mark(run, "videos", "blocked", video_detail)
 
         variations = []
         for h in (plan.hooks or [])[:5]:

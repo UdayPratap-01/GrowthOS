@@ -2,8 +2,35 @@
 
 from __future__ import annotations
 
+import enum
+
 from app.core.config import get_settings
 from app.models.organization import Organization
+
+
+class ExecutionMode(str, enum.Enum):
+    """
+    How a result was produced. Callers must never collapse these into a bare
+    boolean "success" — a simulated execution is not a real one.
+
+    DEMO_DATA       Seeded or illustrative data. Nothing was executed.
+    DEMO_EXECUTION  A real code path ran but was simulated; no external side effect
+                    and no external ID exists.
+    REAL_EXECUTION  An external provider confirmed the operation.
+    """
+
+    demo_data = "DEMO_DATA"
+    demo_execution = "DEMO_EXECUTION"
+    real_execution = "REAL_EXECUTION"
+
+
+def execution_mode_for(*, demo: bool, external_id: str | None = None) -> ExecutionMode:
+    """Classify a completed operation honestly."""
+    if demo:
+        return ExecutionMode.demo_execution
+    if external_id:
+        return ExecutionMode.real_execution
+    return ExecutionMode.demo_data
 
 
 def effective_demo_mode(organization: Organization | None = None, *, org_demo: bool | None = None) -> bool:

@@ -315,6 +315,67 @@ class OptimizationService:
             for r in rows
         ]
 
+    async def health_narrative(self, organization, client_id: UUID) -> dict:
+        """
+        A written summary of campaign health, built on top of scores that were
+        already computed arithmetically in `_score_campaigns`.
+
+        This is the role `MonitoringAgent` should have and the reason it was
+        never called: it is a *campaign* analyst, not infrastructure monitoring
+        — that is `app/observability/metrics.py`. Asking a language model to
+        produce a health *score* would contradict "never invent metrics", so the
+        numbers stay deterministic and the model only explains them. If the
+        provider fails, the scores are still returned and the narrative is
+        reported as unavailable rather than fabricated.
+        """
+        health = await self.list_health(organization.id, client_id)
+        if not health:
+            return {
+                "overview": "No campaign health has been computed yet. Run an analysis first.",
+                "health": [],
+                "alerts": [],
+                "insufficient_data": ["No scored campaigns for this client."],
+                "narrative_available": False,
+            }
+
+        context = await ClientService(self.db).build_client_context(organization, client_id)
+        payload = [
+            {
+                "campaign_id": str(row.campaign_id),
+                "score": row.score,
+                "category": row.category,
+                "evidence": row.evidence,
+            }
+            for row in health
+        ]
+
+        try:
+            report = await get_orchestrator().monitor(
+                context,
+                analytics_summary={"scored_campaigns": len(health)},
+                campaigns=payload,
+            )
+        except Exception:
+            # The scores are real and useful on their own; a provider outage
+            # must not make a working feature look broken.
+            return {
+                "overview": "Narrative summary unavailable — the AI provider could not be reached.",
+                "health": payload,
+                "alerts": [],
+                "insufficient_data": [],
+                "narrative_available": False,
+            }
+
+        return {
+            "overview": report.overview,
+            # Deliberately our scores, not the model's: the narrative explains
+            # the numbers, it does not get to change them.
+            "health": payload,
+            "alerts": report.alerts,
+            "insufficient_data": report.insufficient_data,
+            "narrative_available": True,
+        }
+
     def _priority(self, value: str | Priority) -> Priority:
         if isinstance(value, Priority):
             return value

@@ -23,11 +23,12 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
     try {
-      const tokens = await api<{ access_token: string; refresh_token: string }>("/auth/register", {
+      const tokens = await api<{ access_token: string }>("/auth/register", {
         method: "POST",
         body: JSON.stringify(form),
       });
-      setTokens(tokens.access_token, tokens.refresh_token);
+      // The refresh token arrives as an httpOnly cookie and is never read here.
+      setTokens(tokens.access_token);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");

@@ -16,6 +16,14 @@ dist/
 build/
 coverage/
 storage/
+storage_test_media/
+storage_test_media_unit/
+media/
+apps/api/storage/
+apps/api/media/
+apps/api/storage_test_media/
+**/organizations/*/clients/*/campaigns/*/images/
+**/organizations/*/clients/*/campaigns/*/videos/
 *.db
 *.sqlite3
 apps/api/growthos.db

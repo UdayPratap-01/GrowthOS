@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agents.lead_agent import LeadScoreRequest
 from app.ai.orchestrator import get_orchestrator
+from app.services.usage_service import Metric, meter
 from app.models.enums import LeadStatus
 from app.models.organization import Organization
 from app.repositories.lead_repo import LeadRepository
@@ -25,7 +26,7 @@ class LeadService:
 
     async def create_lead(self, organization: Organization, client_id: UUID, data: LeadCreate) -> LeadOut:
         context = await self.clients.build_client_context(organization, client_id)
-        score = await self.orchestrator.score_lead(
+        score = self.orchestrator.score_lead_deterministic(
             context,
             LeadScoreRequest(
                 name=data.name,
@@ -44,6 +45,13 @@ class LeadService:
             data,
             score=score.score,
             explanation=score.model_dump(),
+        )
+        await meter(
+            self.db,
+            organization_id=organization.id,
+            metric=Metric.LEAD,
+            idempotency_key=f"lead:{lead.id}",
+            client_id=client_id,
         )
         return LeadOut.model_validate(lead)
 
@@ -65,7 +73,7 @@ class LeadService:
         if not lead:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
         context = await self.clients.build_client_context(organization, client_id)
-        score = await self.orchestrator.score_lead(
+        score = self.orchestrator.score_lead_deterministic(
             context,
             LeadScoreRequest(
                 name=lead.name,

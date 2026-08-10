@@ -4,9 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import ai_limit
 from app.schemas.strategy import ActionStatusUpdate, StrategyGenerateRequest, StrategyOut
+from app.security.quota import requires_quota
 from app.services.strategy_service import StrategyService
+from app.services.usage_service import Metric
 
 router = APIRouter(prefix="/clients/{client_id}/strategies", tags=["strategies"])
 
@@ -20,11 +24,15 @@ async def list_strategies(
     return await StrategyService(db).list_strategies(auth.organization_id, client_id)
 
 
-@router.post("/generate", response_model=StrategyOut)
+@router.post(
+    "/generate",
+    response_model=StrategyOut,
+    dependencies=[Depends(ai_limit), Depends(requires_quota(Metric.AI_REQUEST))],
+)
 async def generate_strategy(
     client_id: UUID,
     data: StrategyGenerateRequest | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> StrategyOut:
     title = data.title if data else None
@@ -36,7 +44,7 @@ async def update_action(
     client_id: UUID,
     action_id: UUID,
     data: ActionStatusUpdate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> StrategyOut:
     return await StrategyService(db).update_action_status(

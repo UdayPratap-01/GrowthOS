@@ -1,3 +1,4 @@
+from app.models.auth_tokens import RefreshToken
 from app.models.ai_ops import AIConversation, AIRecommendation, AuditLog, Integration, Notification, Report, Subscription
 from app.models.automation import (
     AIAction,
@@ -13,6 +14,7 @@ from app.models.automation import (
     ScheduledPost,
     VideoJob,
 )
+from app.models.billing import BillingEvent, OrganizationSubscription, Plan, SubscriptionStatus
 from app.models.client import Client, ClientUser
 from app.models.leads import Lead, LeadActivity
 from app.models.marketing import (
@@ -30,7 +32,9 @@ from app.models.marketing import (
 )
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
+from app.models.usage import UsageRecord
 from app.models.user import User
+from app.models.webhooks import WebhookEvent
 
 __all__ = [
     "User",
@@ -72,4 +76,11 @@ __all__ = [
     "CampaignHealth",
     "BackgroundJob",
     "AutopilotRun",
+    "WebhookEvent",
+    "RefreshToken",
+    "UsageRecord",
+    "Plan",
+    "OrganizationSubscription",
+    "SubscriptionStatus",
+    "BillingEvent",
 ]

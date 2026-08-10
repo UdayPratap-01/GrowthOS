@@ -14,7 +14,15 @@ cryptography==44.0.0
 httpx==0.28.1
 python-multipart==0.0.20
 orjson==3.10.12
+# Shared rate-limit backend + job coordination across API instances.
+redis==8.1.0
+# S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, ...).
+boto3==1.43.67
+reportlab==4.2.5
+
+# --- test only ---
 pytest==8.3.4
 pytest-asyncio==0.24.0
 aiosqlite==0.20.0
-reportlab==4.2.5
+fakeredis==2.37.0
+moto[s3]==5.2.2

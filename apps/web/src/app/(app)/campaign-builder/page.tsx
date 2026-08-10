@@ -195,18 +195,48 @@ export default function CampaignBuilderPage() {
             action={
               <div className="flex gap-2">
                 {result.run.demo_mode ? <Badge tone="demo">DEMO DATA</Badge> : null}
-                <Badge tone="accent">{result.run.status}</Badge>
+                <Badge
+                  tone={
+                    result.run.status === "failed"
+                      ? "danger"
+                      : result.run.status === "completed"
+                        ? "success"
+                        : "accent"
+                  }
+                >
+                  {result.run.status}
+                </Badge>
               </div>
             }
           />
+          <p className="mb-3 text-xs text-[var(--muted)]">
+            Lifecycle: draft → pending approval → approved → executing → published / failed.
+            This build creates structured actions; live publishing only happens after approval
+            and a confirmed platform response.
+          </p>
           <ol className="space-y-2">
             {(result.run.steps || []).map((s) => (
               <li key={s.key} className="flex items-start gap-3 rounded-xl border border-[var(--line)] px-3 py-2 text-sm">
                 <span className="mt-0.5 w-5 shrink-0">
-                  {s.status === "completed" ? "✓" : s.status === "blocked" ? "!" : s.status === "running" ? "⏳" : "○"}
+                  {s.status === "completed" ? "✓" : s.status === "blocked" || s.status === "failed" ? "!" : s.status === "running" ? "⏳" : "○"}
                 </span>
-                <div>
-                  <div className="font-medium">{s.label}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-medium">{s.label}</div>
+                    <Badge
+                      tone={
+                        s.status === "completed"
+                          ? "success"
+                          : s.status === "failed" || s.status === "blocked"
+                            ? "danger"
+                            : s.status === "running"
+                              ? "accent"
+                              : "default"
+                      }
+                    >
+                      {s.status}
+                    </Badge>
+                  </div>
                   {s.detail ? <div className="text-[var(--muted)]">{s.detail}</div> : null}
                 </div>
               </li>

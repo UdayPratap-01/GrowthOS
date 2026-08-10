@@ -7,11 +7,18 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { api, setTokens } from "@/lib/api";
 
+// Demo credentials are never hardcoded. They come from env vars that are only
+// defined in local development, so a production build has nothing to reveal.
+const DEMO_EMAIL = process.env.NEXT_PUBLIC_DEMO_EMAIL ?? "";
+const DEMO_PASSWORD = process.env.NEXT_PUBLIC_DEMO_PASSWORD ?? "";
+const SHOW_DEMO_LOGIN =
+  process.env.NEXT_PUBLIC_ENVIRONMENT === "development" && Boolean(DEMO_EMAIL && DEMO_PASSWORD);
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const [email, setEmail] = useState("demo@growthos.ai");
-  const [password, setPassword] = useState("demo1234");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -20,11 +27,12 @@ function LoginForm() {
     setLoading(true);
     setError(null);
     try {
-      const tokens = await api<{ access_token: string; refresh_token: string }>("/auth/login", {
+      const tokens = await api<{ access_token: string }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      setTokens(tokens.access_token, tokens.refresh_token);
+      // The refresh token arrives as an httpOnly cookie and is never read here.
+      setTokens(tokens.access_token);
       router.push(params.get("next") || "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -42,11 +50,23 @@ function LoginForm() {
       <form className="space-y-4" onSubmit={onSubmit}>
         <div>
           <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Email</label>
-          <Input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+          <Input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type="email"
+            autoComplete="username"
+            required
+          />
         </div>
         <div>
           <label className="mb-1.5 block text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Password</label>
-          <Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+          <Input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            type="password"
+            autoComplete="current-password"
+            required
+          />
         </div>
         {error ? <p className="text-sm text-rose-600">{error}</p> : null}
         <Button className="w-full" disabled={loading} type="submit">
@@ -59,7 +79,21 @@ function LoginForm() {
           Create account
         </Link>
       </p>
-      <p className="mt-3 text-center text-xs text-[var(--muted)]">Demo: demo@growthos.ai / demo1234</p>
+      {SHOW_DEMO_LOGIN ? (
+        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-center">
+          <p className="text-xs font-medium text-amber-900">Development environment</p>
+          <button
+            className="mt-1 text-xs font-medium text-amber-900 underline"
+            onClick={() => {
+              setEmail(DEMO_EMAIL);
+              setPassword(DEMO_PASSWORD);
+            }}
+            type="button"
+          >
+            Fill demo credentials
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

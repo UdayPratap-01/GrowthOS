@@ -37,10 +37,17 @@ Make sure Docker Desktop is running, then:
 ./scripts/start-api-docker.sh
 ```
 
-This builds the API image, starts Postgres, seeds demo data, and serves:
+This builds the API image, starts Postgres, and serves:
 
 - API: http://localhost:8000
 - Docs: http://localhost:8000/docs
+
+The container does **not** seed demo data. Seeding is an explicit development
+step and is refused when `ENVIRONMENT=production`:
+
+```bash
+./scripts/seed-demo.sh
+```
 
 ### 2. Start web (Node only)
 
@@ -50,10 +57,15 @@ This builds the API image, starts Postgres, seeds demo data, and serves:
 
 Open http://localhost:3000
 
-Demo login:
+**Development login** (only exists after running the seeder above; these
+credentials must never be created in staging or production):
 
 - Email: `demo@growthos.ai`
 - Password: `demo1234`
+
+The login form always starts empty. Set `NEXT_PUBLIC_DEMO_EMAIL` and
+`NEXT_PUBLIC_DEMO_PASSWORD` in `apps/web/.env.local` to get a
+"Fill demo credentials" button in development.
 
 ## Alternative: local Python venv
 
@@ -65,7 +77,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp ../../.env .env
-PYTHONPATH=. python -m app.demo.seed
+PYTHONPATH=. python -m app.demo.seed   # development only; refused if ENVIRONMENT=production
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -141,12 +153,20 @@ Effective mode = `organization.demo_mode` **OR** env `DEMO_MODE`.
 
 Top bar always shows DEMO MODE or LIVE MODE. Toggle org flag in Settings (`PATCH /auth/organization/mode`). Set `DEMO_MODE=false` in `.env` for production.
 
-Optional generation providers:
+Media generation providers (real files required for COMPLETED):
 
 ```bash
-IMAGE_PROVIDER=none   # or demo (DEMO DATA concepts only)
-VIDEO_PROVIDER=none   # or demo
+IMAGE_PROVIDER=none|demo|openai
+IMAGE_API_KEY=          # or reuse OPENAI_API_KEY when IMAGE_PROVIDER=openai
+IMAGE_MODEL=dall-e-3
+VIDEO_PROVIDER=none|demo|replicate
+VIDEO_API_KEY=
+VIDEO_MODEL=            # replicate owner/name or version
+STORAGE_BACKEND=local
+STORAGE_LOCAL_PATH=./storage
 ```
+
+See [`docs/MEDIA_GENERATION_IMPLEMENTATION_REPORT.md`](docs/MEDIA_GENERATION_IMPLEMENTATION_REPORT.md).
 
 ### Phase 3–4 integrations
 

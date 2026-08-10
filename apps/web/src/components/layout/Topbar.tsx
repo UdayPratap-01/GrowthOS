@@ -2,7 +2,7 @@
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { clearTokens } from "@/lib/api";
+import { logout } from "@/lib/api";
 import { User } from "@/types";
 import { useRouter } from "next/navigation";
 
@@ -40,8 +40,8 @@ export function Topbar({ user }: { user: User | null }) {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => {
-              clearTokens();
+            onClick={async () => {
+              await logout();
               router.push("/login");
             }}
           >

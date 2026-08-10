@@ -199,6 +199,11 @@ class CreativeAssetOut(BaseModel):
     content: dict
     meta: dict
     data_source: str
+    mime_type: str | None = None
+    width: int | None = None
+    height: int | None = None
+    storage_key: str | None = None
+    url: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -208,12 +213,18 @@ class ImageGenerateRequest(BaseModel):
     client_id: UUID
     prompt: str
     platform: str | None = None
+    aspect_ratio: str = "1:1"
+    quantity: int = Field(default=1, ge=1, le=5)
+    campaign_id: UUID | None = None
 
 
 class VideoGenerateRequest(BaseModel):
     client_id: UUID
     prompt: str
     platform: str | None = None
+    aspect_ratio: str = "9:16"
+    duration_seconds: int = Field(default=10, ge=2, le=60)
+    campaign_id: UUID | None = None
 
 
 class ScheduleContentRequest(BaseModel):

@@ -8,13 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
-from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
+from app.core.security import hash_password, verify_password
 from app.models.ai_ops import Subscription
 from app.models.enums import MemberRole
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from app.observability import events, metrics
 from app.security.audit import write_audit
+from app.services.refresh_token_service import RefreshTokenService
 
 
 def slugify(value: str) -> str:
@@ -27,7 +29,7 @@ class AuthService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def register(self, data: RegisterRequest) -> TokenResponse:
+    async def register(self, data: RegisterRequest, *, user_agent: str | None = None) -> TokenResponse:
         existing = await self.db.scalar(select(User).where(User.email == data.email.lower()))
         if existing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
@@ -54,11 +56,16 @@ class AuthService:
         self.db.add(Subscription(organization_id=org.id, plan="starter", status="active"))
         await write_audit(self.db, action="auth.register", organization_id=org.id, user_id=user.id)
         await self.db.flush()
-        return TokenResponse(access_token=create_access_token(user.id), refresh_token=create_refresh_token(user.id))
+        return await RefreshTokenService(self.db).issue_pair(user.id, user_agent=user_agent)
 
-    async def login(self, data: LoginRequest) -> TokenResponse:
+    async def login(self, data: LoginRequest, *, user_agent: str | None = None) -> TokenResponse:
         user = await self.db.scalar(select(User).where(User.email == data.email.lower()))
         if not user or not verify_password(data.password, user.hashed_password):
+            # One branch for both "no such user" and "wrong password": the log
+            # records a hashed email, and the caller gets an identical response,
+            # so neither reveals whether the account exists.
+            events.auth_failure(email=data.email, reason="invalid_credentials")
+            metrics.record_auth(outcome="failure")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         user.last_login_at = datetime.now(timezone.utc)
         membership = await self.db.scalar(select(OrganizationMember).where(OrganizationMember.user_id == user.id))
@@ -68,7 +75,12 @@ class AuthService:
             organization_id=membership.organization_id if membership else None,
             user_id=user.id,
         )
-        return TokenResponse(access_token=create_access_token(user.id), refresh_token=create_refresh_token(user.id))
+        events.auth_success(
+            user_id=user.id,
+            organization_id=membership.organization_id if membership else None,
+        )
+        metrics.record_auth(outcome="success")
+        return await RefreshTokenService(self.db).issue_pair(user.id, user_agent=user_agent)
 
     async def me(self, user_id: UUID) -> UserOut:
         result = await self.db.execute(
