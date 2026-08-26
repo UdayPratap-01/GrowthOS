@@ -132,6 +132,17 @@ class ActionValidator:
                     errors.extend(delta.errors)
                 except Exception:
                     errors.append("BUDGET_CHANGE_PCT_INVALID")
+            abs_delta = (payload or {}).get("budget_change_amount") or (payload or {}).get("max_budget_change")
+            if abs_delta is not None:
+                try:
+                    amount = Decimal(str(abs_delta))
+                    max_change = getattr(settings, "maximum_budget_increase_percentage", None)
+                    # Treat maximum_campaign_budget as absolute cap for single-step changes when amount provided.
+                    cap = settings.maximum_campaign_budget
+                    if amount > cap:
+                        errors.append(f"AUTONOMY_LIMIT_EXCEEDED: budget_change_amount exceeds maximum_campaign_budget ({cap})")
+                except Exception:
+                    errors.append("BUDGET_CHANGE_AMOUNT_INVALID")
 
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         if action_type in CAMPAIGN_CREATE_ACTIONS:

@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -50,6 +52,7 @@ async def test_autonomy_settings_and_action_approval_flow():
                 "reason": "Autopilot test",
                 "evidence": ["test"],
                 "agent": "CreativeAgent",
+                "payload": {"idempotency_key": f"autopilot-test-{uuid.uuid4()}"},
             },
         )
         assert created.status_code == 200

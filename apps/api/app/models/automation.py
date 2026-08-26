@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -57,6 +57,16 @@ class AutonomySettings(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class AIAction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "ai_actions"
+    __table_args__ = (
+        Index(
+            "uq_ai_actions_org_idempotency",
+            "organization_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+            sqlite_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     organization_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
@@ -97,6 +107,8 @@ class AIAction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class ActionExecution(Base, UUIDPrimaryKeyMixin, TimestampMixin):

@@ -5,9 +5,15 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.automation.action_types import get_action_spec
+from app.automation.idempotency import (
+    build_action_idempotency_key,
+    find_action_by_idempotency,
+    sanitize_platform_response,
+)
 from app.automation.execution import ExecutionEngine, RollbackHandler
 from app.automation.safety import ActionValidator
 from app.core.mode import effective_demo_mode
@@ -54,6 +60,19 @@ class ActionService:
         if not validation.ok:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="; ".join(validation.errors))
 
+        idempotency_key = build_action_idempotency_key(
+            organization_id=organization_id,
+            action_type=data.action_type.value,
+            target_id=data.target_id,
+            payload=data.payload,
+            explicit=(data.payload or {}).get("idempotency_key"),
+        )
+        existing = await find_action_by_idempotency(
+            self.db, organization_id=organization_id, idempotency_key=idempotency_key
+        )
+        if existing is not None:
+            return AIActionOut.model_validate(existing)
+
         spec = get_action_spec(data.action_type)
         requires_approval = validation.requires_approval
         org = organization or await self.db.get(Organization, organization_id)
@@ -80,9 +99,19 @@ class ActionService:
             payload=data.payload,
             demo_mode=demo,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=48),
+            idempotency_key=idempotency_key,
         )
         self.db.add(action)
-        await self.db.flush()
+        try:
+            async with self.db.begin_nested():
+                await self.db.flush()
+        except IntegrityError:
+            dup = await find_action_by_idempotency(
+                self.db, organization_id=organization_id, idempotency_key=idempotency_key
+            )
+            if dup is not None:
+                return AIActionOut.model_validate(dup)
+            raise
 
         # Auto-execute when automation on, approval not required, and mode is assisted/autonomous
         can_auto = (
@@ -199,6 +228,24 @@ class ActionService:
         if action.retry_count >= 3 and action.action_type.value.startswith(("UPDATE_BUDGET", "CREATE_")):
             raise HTTPException(status_code=400, detail="Max retries reached for this financial/create action")
         action = await ExecutionEngine(self.db).execute(action, actor_user_id=user_id, force=True)
+        return AIActionOut.model_validate(action)
+
+    async def cancel(self, organization_id: UUID, action_id: UUID, user_id: UUID) -> AIActionOut:
+        action = await self.get(organization_id, action_id)
+        if action.status not in {AIActionStatus.pending, AIActionStatus.approved, AIActionStatus.scheduled}:
+            raise HTTPException(status_code=400, detail=f"Cannot cancel action in status {action.status.value}")
+        action.status = AIActionStatus.cancelled
+        await write_audit(
+            self.db,
+            organization_id=organization_id,
+            user_id=user_id,
+            action="ai_action.cancelled",
+            resource_type="ai_action",
+            resource_id=str(action.id),
+            details={},
+        )
+        await self.db.flush()
+        await self.db.refresh(action)
         return AIActionOut.model_validate(action)
 
     async def rollback(self, organization_id: UUID, action_id: UUID, user_id: UUID) -> dict:

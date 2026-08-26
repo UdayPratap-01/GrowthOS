@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.orchestrator import get_orchestrator
+from app.automation.rule_engine import evaluate_rule_conditions
 from app.models.automation import CampaignHealth, OptimizationEvent, OptimizationRule
 from app.models.enums import AIActionType, HealthCategory, Priority, RiskLevel
 from app.models.marketing import Campaign
@@ -125,56 +127,76 @@ class OptimizationService:
 
         actions_created = 0
         events_out: list[OptimizationEventOut] = []
+        failures = 0
+        cycle_started = datetime.now(timezone.utc)
+
         for event in rule_events:
             events_out.append(OptimizationEventOut.model_validate(event))
-
-        for suggestion in plan.suggestions[: max_actions]:
-            event = OptimizationEvent(
-                organization_id=organization.id,
-                client_id=data.client_id,
-                problem=suggestion.problem,
-                evidence=suggestion.evidence,
-                recommendation=suggestion.recommendation,
-                priority=self._priority(suggestion.priority),
-                status="open",
+            spawned = await self._maybe_spawn_rule_action(
+                organization, data.client_id, event, user_id=user_id, settings=settings
             )
-            self.db.add(event)
-            await self.db.flush()
-
-            action_type = self._map_action_type(suggestion.suggested_action_type)
-            cost = (
-                Decimal(str(suggestion.estimated_cost))
-                if suggestion.estimated_cost is not None
-                else (Decimal("50") if action_type.value in {"CREATE_CAMPAIGN", "CREATE_AD", "CREATE_AD_SET", "UPDATE_BUDGET"} else None)
-            )
-            try:
-                created = await ActionService(self.db).create(
-                    organization.id,
-                    AIActionCreate(
-                        action_type=action_type,
-                        client_id=data.client_id,
-                        agent="OptimizationAgent",
-                        platform=suggestion.platform,
-                        target_id=suggestion.target_id,
-                        description=suggestion.recommendation,
-                        reason=suggestion.problem,
-                        evidence=suggestion.evidence,
-                        expected_impact=suggestion.expected_impact,
-                        estimated_cost=cost,
-                        priority=self._priority(suggestion.priority),
-                        risk_level=RiskLevel.medium,
-                        payload={"source": "decision_loop", "insufficient_data": plan.insufficient_data},
-                    ),
-                    user_id=user_id,
-                    organization=organization,
-                )
-                event.action_id = created.id
+            if spawned:
                 actions_created += 1
-            except Exception:
-                # Keep optimization event even if action blocked by safety rules
-                event.status = "blocked"
-            await self.db.flush()
-            events_out.append(OptimizationEventOut.model_validate(event))
+
+        for iteration in range(max_iterations):
+            if actions_created >= max_actions:
+                break
+            if failures >= getattr(settings, "max_failures_per_cycle", 3):
+                break
+            elapsed = (datetime.now(timezone.utc) - cycle_started).total_seconds()
+            if elapsed > getattr(settings, "max_execution_time", 300):
+                break
+
+            suggestions = plan.suggestions if iteration == 0 else []
+            for suggestion in suggestions[: max(0, max_actions - actions_created)]:
+                event = OptimizationEvent(
+                    organization_id=organization.id,
+                    client_id=data.client_id,
+                    problem=suggestion.problem,
+                    evidence=suggestion.evidence,
+                    recommendation=suggestion.recommendation,
+                    priority=self._priority(suggestion.priority),
+                    status="open",
+                )
+                self.db.add(event)
+                await self.db.flush()
+
+                action_type = self._map_action_type(suggestion.suggested_action_type)
+                cost = (
+                    Decimal(str(suggestion.estimated_cost))
+                    if suggestion.estimated_cost is not None
+                    else (Decimal("50") if action_type.value in {"CREATE_CAMPAIGN", "CREATE_AD", "CREATE_AD_SET", "UPDATE_BUDGET"} else None)
+                )
+                try:
+                    created = await ActionService(self.db).create(
+                        organization.id,
+                        AIActionCreate(
+                            action_type=action_type,
+                            client_id=data.client_id,
+                            agent="OptimizationAgent",
+                            platform=suggestion.platform,
+                            target_id=suggestion.target_id,
+                            description=suggestion.recommendation,
+                            reason=suggestion.problem,
+                            evidence=suggestion.evidence,
+                            expected_impact=suggestion.expected_impact,
+                            estimated_cost=cost,
+                            priority=self._priority(suggestion.priority),
+                            risk_level=RiskLevel.medium,
+                            payload={"source": "decision_loop", "insufficient_data": plan.insufficient_data},
+                        ),
+                        user_id=user_id,
+                        organization=organization,
+                    )
+                    event.action_id = created.id
+                    actions_created += 1
+                except Exception:
+                    failures += 1
+                    event.status = "blocked"
+                await self.db.flush()
+                events_out.append(OptimizationEventOut.model_validate(event))
+            if iteration > 0:
+                break  # Additional iterations reserved for future scheduled re-analysis
 
         if not plan.suggestions and not rule_events:
             msg = "INSUFFICIENT DATA" if plan.insufficient_data or analytics.insufficient_data else "No optimization actions warranted."
@@ -266,35 +288,74 @@ class OptimizationService:
             if rule.client_id and rule.client_id != client_id:
                 continue
             cond = rule.condition or {}
-            # Example: CPL > target_CPL * 1.30 AND spend > min AND conversions >= min
-            target = cond.get("target_cpl")
-            multiplier = float(cond.get("cpl_multiplier", 1.3))
-            min_spend = float(cond.get("minimum_spend", 0))
-            min_conv = int(cond.get("minimum_conversions", 0))
-            if target is None or current_cpl is None:
+            metrics = {
+                "cpl": current_cpl,
+                "spend": spend,
+                "conversions": conversions,
+                "leads": conversions,
+                "ctr": float(analytics.current.ctr) if analytics.current.ctr is not None else None,
+            }
+            conditions = cond.get("conditions") if isinstance(cond.get("conditions"), list) else cond
+            match = evaluate_rule_conditions(conditions, metrics)
+            if not match.matched:
                 continue
-            if current_cpl > float(target) * multiplier and spend > min_spend and conversions >= min_conv:
-                event = OptimizationEvent(
-                    organization_id=organization_id,
-                    client_id=client_id,
-                    rule_id=rule.id,
-                    problem=f"CPL {current_cpl} exceeded target {target} × {multiplier}",
-                    evidence=[
-                        f"Current CPL = {current_cpl}",
-                        f"Target CPL = {target}",
-                        f"Spend = {spend}",
-                        f"Conversions = {conversions}",
-                        f"data_source = {analytics.data_source}",
-                    ],
-                    recommendation=(rule.action_template or {}).get("recommendation")
-                    or "Create creative variations and review weakest campaign spend.",
-                    priority=rule.priority,
-                    status="open",
-                )
-                self.db.add(event)
-                await self.db.flush()
-                events.append(event)
+            event = OptimizationEvent(
+                organization_id=organization_id,
+                client_id=client_id,
+                rule_id=rule.id,
+                problem=match.reason or f"Rule {rule.name} triggered",
+                evidence=[
+                    match.reason or "",
+                    f"Spend = {spend}",
+                    f"Conversions = {conversions}",
+                    f"data_source = {analytics.data_source}",
+                ],
+                recommendation=(rule.action_template or {}).get("recommendation")
+                or "Create creative variations and review weakest campaign spend.",
+                priority=rule.priority,
+                status="open",
+            )
+            self.db.add(event)
+            await self.db.flush()
+            events.append(event)
         return events
+
+    async def _maybe_spawn_rule_action(self, organization, client_id: UUID, event: OptimizationEvent, *, user_id: UUID, settings) -> bool:
+        template = {}
+        if event.rule_id:
+            rule = await self.db.get(OptimizationRule, event.rule_id)
+            template = (rule.action_template or {}) if rule else {}
+        action_type_raw = template.get("action_type") or "GENERATE_CREATIVE_VARIATIONS"
+        try:
+            action_type = AIActionType(action_type_raw)
+        except ValueError:
+            action_type = AIActionType.generate_creative_variations
+        try:
+            created = await ActionService(self.db).create(
+                organization.id,
+                AIActionCreate(
+                    action_type=action_type,
+                    client_id=client_id,
+                    agent="OptimizationRuleEngine",
+                    platform=template.get("platform"),
+                    description=event.recommendation,
+                    reason=event.problem,
+                    evidence=event.evidence,
+                    estimated_cost=Decimal(str(template["estimated_cost"])) if template.get("estimated_cost") else None,
+                    priority=event.priority,
+                    risk_level=RiskLevel.medium,
+                    payload={"source": "optimization_rule", "optimization_event_id": str(event.id), **template.get("payload", {})},
+                ),
+                user_id=user_id,
+                organization=organization,
+            )
+            event.action_id = created.id
+            await self.db.flush()
+            return True
+        except Exception:
+            event.status = "blocked"
+            await self.db.flush()
+            return False
 
     async def list_health(self, organization_id: UUID, client_id: UUID | None = None) -> list[CampaignHealthOut]:
         stmt = select(CampaignHealth).where(CampaignHealth.organization_id == organization_id)

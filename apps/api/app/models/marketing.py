@@ -105,6 +105,11 @@ class AdSet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     placements: Mapped[list] = mapped_column(JSON, default=list)
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by_action_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ai_actions.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class Ad(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -130,6 +135,11 @@ class Ad(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     destination: Mapped[str | None] = mapped_column(String(512), nullable=True)
     creative: Mapped[dict] = mapped_column(JSON, default=dict)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by_action_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("ai_actions.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class SocialPost(Base, UUIDPrimaryKeyMixin, TimestampMixin):

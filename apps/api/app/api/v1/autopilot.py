@@ -15,6 +15,8 @@ from app.schemas.autopilot import (
     ActionDecision,
     AutonomySettingsOut,
     AutonomySettingsUpdate,
+    AutopilotCycleRequest,
+    AutopilotCycleResult,
     AutopilotRunOut,
     AutopilotRunRequest,
     AutopilotSummary,
@@ -37,6 +39,7 @@ from app.schemas.autopilot import (
 )
 from app.services.action_service import ActionService
 from app.services.autonomy_service import AutonomyService
+from app.services.autopilot_orchestrator_service import AutopilotOrchestratorService
 from app.services.campaign_build_service import CampaignBuildService
 from app.services.creative_service import CreativeService
 from app.services.optimization_service import OptimizationService
@@ -131,6 +134,15 @@ async def execute_action(
     db: AsyncSession = Depends(get_db),
 ) -> AIActionOut:
     return await ActionService(db).execute(auth.organization_id, action_id, auth.user.id)
+
+
+@router.post("/actions/{action_id}/cancel", response_model=AIActionOut)
+async def cancel_action(
+    action_id: UUID,
+    auth: AuthContext = Depends(require_permission(Permission.action_approve)),
+    db: AsyncSession = Depends(get_db),
+) -> AIActionOut:
+    return await ActionService(db).cancel(auth.organization_id, action_id, auth.user.id)
 
 
 @router.post("/actions/{action_id}/rollback")
@@ -374,6 +386,64 @@ async def process_jobs(
         "queued": True,
         "processed": len(processed),
         "ids": [str(j.id) for j in processed],
+    }
+
+
+@router.post("/cycle", response_model=AutopilotCycleResult, dependencies=[Depends(campaign_execution_limit)])
+async def run_autopilot_cycle(
+    data: AutopilotCycleRequest,
+    auth: AuthContext = Depends(require_permission(Permission.autonomous_execution)),
+    db: AsyncSession = Depends(get_db),
+) -> AutopilotCycleResult:
+    return await AutopilotOrchestratorService(db).run_cycle(
+        auth.organization,
+        client_id=data.client_id,
+        run_id=data.run_id,
+        user_id=auth.user.id,
+        max_iterations=data.max_iterations,
+    )
+
+
+@router.get("/capabilities")
+async def provider_capabilities(
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+    client_id: UUID | None = Query(default=None),
+) -> dict:
+    from app.core.config import get_settings
+    from app.integrations.persistence import get_integration_row
+    from app.publishing.capabilities import (
+        google_ads_capabilities,
+        instagram_publish_capabilities,
+        meta_ads_capabilities,
+    )
+
+    settings = get_settings()
+    meta_row = await get_integration_row(db, organization_id=auth.organization_id, provider="meta", client_id=client_id)
+    google_row = await get_integration_row(
+        db, organization_id=auth.organization_id, provider="google_ads", client_id=client_id
+    )
+    ig_row = await get_integration_row(
+        db, organization_id=auth.organization_id, provider="instagram", client_id=client_id
+    )
+    meta_connected = bool(meta_row and meta_row.secret_ref and meta_row.status == "connected")
+    google_connected = bool(google_row and google_row.secret_ref and google_row.status == "connected")
+    ig_connected = bool(ig_row and ig_row.secret_ref and ig_row.status == "connected")
+    return {
+        "providers": [
+            meta_ads_capabilities(
+                connected=meta_connected,
+                credentials_configured=bool(settings.meta_app_id and settings.meta_app_secret),
+            ).as_dict(),
+            google_ads_capabilities(
+                connected=google_connected,
+                credentials_configured=bool(
+                    settings.google_client_id and settings.google_client_secret and settings.google_ads_developer_token
+                ),
+            ).as_dict(),
+            instagram_publish_capabilities(connected=ig_connected).as_dict(),
+        ],
+        "demo_mode": auth.demo_mode,
     }
 
 

@@ -102,6 +102,8 @@ class AIActionOut(BaseModel):
     executed_at: datetime | None
     error: str | None
     retry_count: int
+    idempotency_key: str | None = None
+    external_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -343,3 +345,25 @@ class CreativeVariationsRequest(BaseModel):
     objective: str = "Lead generation"
     topic: str | None = None
     count: int = Field(default=5, ge=1, le=20)
+
+
+class AutopilotCycleRequest(BaseModel):
+    client_id: UUID
+    run_id: UUID | None = None
+    max_iterations: int = Field(default=1, ge=1, le=5)
+
+
+class AutopilotCycleResult(BaseModel):
+    cycle_id: str
+    organization_id: UUID
+    client_id: UUID
+    run_id: UUID | None = None
+    started_at: datetime
+    completed_at: datetime
+    iterations: int
+    actions_created: int
+    actions_executed: int
+    actions_blocked: int
+    errors: list[str] = Field(default_factory=list)
+    analytics_data_source: str
+    message: str = "Autopilot cycle completed"

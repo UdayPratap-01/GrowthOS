@@ -7,6 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "ai_actions": [
+        ("idempotency_key", "VARCHAR(255)"),
+        ("external_id", "VARCHAR(255)"),
+    ],
     "autonomy_settings": [
         ("maximum_actions_per_day", "INTEGER DEFAULT 50"),
         ("max_ai_iterations", "INTEGER DEFAULT 1"),
@@ -47,6 +51,9 @@ TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("daily_budget", "NUMERIC(12, 2)"),
         ("optimization", "VARCHAR(64)"),
         ("placements", "JSON"),
+        ("external_id", "VARCHAR(255)"),
+        ("platform", "VARCHAR(64)"),
+        ("created_by_action_id", "CHAR(32)"),
     ],
     "ads": [
         ("concept_id", "CHAR(32)"),
@@ -56,6 +63,9 @@ TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("primary_text", "TEXT"),
         ("cta", "VARCHAR(120)"),
         ("destination", "VARCHAR(512)"),
+        ("external_id", "VARCHAR(255)"),
+        ("platform", "VARCHAR(64)"),
+        ("created_by_action_id", "CHAR(32)"),
     ],
     "image_jobs": [
         ("campaign_id", "CHAR(32)"),

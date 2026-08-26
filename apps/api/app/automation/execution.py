@@ -10,15 +10,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.automation.action_types import FINANCIAL_ACTIONS, get_action_spec
+from app.automation.idempotency import (
+    execution_idempotency_key,
+    sanitize_platform_response,
+    try_claim_action_for_execution,
+)
 from app.automation.safety import ActionValidator, PermissionChecker
+from app.automation.tenant import TargetValidator
 from app.core.config import get_settings
-from app.integrations.persistence import get_integration_row
+from app.jobs.queue import JobQueue
+from app.jobs.registry import REPORT_GENERATE
 from app.models.ai_ops import Notification
 from app.models.automation import ActionExecution, AIAction, AutonomySettings, CreativeAsset, ScheduledPost
 from app.models.enums import AIActionStatus, AIActionType, AutonomyMode
 from app.models.marketing import Campaign
 from app.models.organization import Organization
 from app.publishing import get_publisher
+from app.publishing.ads_executor import AdsExecutor
 from app.security.audit import write_audit
 
 
@@ -33,9 +41,16 @@ class ExecutionEngine:
         actor_user_id: UUID | None,
         force: bool = False,
     ) -> AIAction:
+        if action.status == AIActionStatus.completed and not force:
+            return action
+
         tenant = await PermissionChecker().check_tenant(action.organization_id, action.organization_id)
         if not tenant.ok:
             return await self._fail(action, "TENANT_MISMATCH", actor_user_id)
+
+        target_check = await TargetValidator(self.db).validate_action_targets(action)
+        if not target_check.ok:
+            return await self._fail(action, ";".join(target_check.errors), actor_user_id)
 
         settings = await self._load_settings(action.organization_id, action.client_id)
         if action.status not in {AIActionStatus.approved, AIActionStatus.pending, AIActionStatus.failed}:
@@ -66,8 +81,14 @@ class ExecutionEngine:
         if not validation.ok:
             return await self._fail(action, ";".join(validation.errors), actor_user_id)
 
-        action.status = AIActionStatus.executing
-        action.error = None
+        claim = await try_claim_action_for_execution(self.db, action, force=force)
+        if claim == "completed":
+            return action
+        if claim == "executing":
+            return action
+        if claim == "blocked":
+            return await self._fail(action, f"INVALID_STATUS:{action.status.value}", actor_user_id)
+
         execution = ActionExecution(
             organization_id=action.organization_id,
             action_id=action.id,
@@ -86,13 +107,18 @@ class ExecutionEngine:
                 raise RuntimeError(result.get("error") or "EXECUTION_NOT_CONFIRMED")
 
             action.status = AIActionStatus.completed
-            action.result = result
+            safe_result = dict(result)
+            if "platform_response" in safe_result:
+                safe_result["platform_response"] = sanitize_platform_response(safe_result["platform_response"])
+            action.result = safe_result
             action.executed_at = datetime.now(timezone.utc)
+            if result.get("external_id"):
+                action.external_id = str(result["external_id"])
             if demo:
                 action.demo_mode = True
-                action.result = {**result, "note": "DEMO DATA"}
+                action.result = {**safe_result, "note": "DEMO DATA"}
             execution.status = AIActionStatus.completed
-            execution.platform_response = result
+            execution.platform_response = safe_result
             execution.finished_at = datetime.now(timezone.utc)
             execution.is_demo = demo
             await write_audit(
@@ -159,10 +185,12 @@ class ExecutionEngine:
             AIActionType.optimize_campaign,
         }:
             return await self._exec_ads_mutation(action)
+        if t == AIActionType.update_content:
+            return await self._exec_update_content(action)
         if t == AIActionType.generate_recommendation:
             return {"confirmed": True, "demo": True, "note": "DEMO DATA — recommendation recorded as action result"}
         if t == AIActionType.generate_report:
-            return {"confirmed": True, "demo": get_settings().demo_mode, "note": "Report generation queued/recorded"}
+            return await self._exec_generate_report(action)
         if t == AIActionType.send_notification:
             await self._notify(action, title=action.description, body=action.reason)
             return {"confirmed": True, "demo": False}
@@ -333,14 +361,17 @@ class ExecutionEngine:
                     "message": pub.message,
                 }
             if not pub.success:
-                # Keep local schedule; do not claim platform schedule.
-                row.publish_result = {"error": pub.error, "message": pub.message}
+                # Keep local schedule row but do not mark the action as platform-confirmed.
+                row.publish_result = sanitize_platform_response(
+                    {"error": pub.error, "message": pub.message, "status": pub.status}
+                )
                 return {
-                    "confirmed": True,
+                    "confirmed": False,
                     "demo": False,
                     "scheduled_post_id": str(row.id),
                     "platform_status": pub.status,
-                    "message": "Local schedule stored. Platform schedule: " + (pub.message or ""),
+                    "error": pub.error or pub.message,
+                    "message": "Local schedule stored. Platform schedule was not confirmed.",
                 }
         return {"confirmed": True, "demo": False, "scheduled_post_id": str(row.id)}
 
@@ -371,43 +402,57 @@ class ExecutionEngine:
             "platform_response": pub.platform_response,
         }
 
-    async def _exec_ads_mutation(self, action: AIAction) -> dict:
-        """Ads mutations require live connected integration + platform write confirmation."""
-        settings = get_settings()
-        platform = (action.platform or "").lower()
-        provider = "meta" if platform in {"meta", "facebook", "instagram"} else platform
-        if provider == "google_ads" or platform == "google":
-            provider = "google_ads"
-
-        if settings.demo_mode or action.demo_mode:
-            if action.action_type == AIActionType.pause_campaign and action.target_id:
-                camp = await self._get_campaign(action)
-                if camp:
-                    action.previous_state = {"status": camp.status}
-                    camp.status = "paused"
-            return {
-                "confirmed": True,
-                "demo": True,
-                "message": "DEMO DATA — ads mutation simulated locally; no live platform write.",
-                "action_type": action.action_type.value,
-                "external_id": None,
-            }
-
-        row = await get_integration_row(
-            self.db, organization_id=action.organization_id, provider=provider, client_id=action.client_id
-        )
-        if not row or not row.secret_ref or row.status != "connected":
-            row = await get_integration_row(
-                self.db, organization_id=action.organization_id, provider=provider, client_id=None
-            )
-        if not row or not row.secret_ref or row.status != "connected":
-            label = provider.upper().replace("_", " ")
-            return {"confirmed": False, "error": f"{label} NOT CONNECTED"}
-
+    async def _exec_update_content(self, action: AIAction) -> dict:
+        content = (action.payload or {}).get("content")
+        if not content:
+            return {"confirmed": False, "error": "CONTENT_REQUIRED"}
         return {
-            "confirmed": False,
-            "error": "LIVE ADS WRITE NOT AVAILABLE — connect scopes and enable write adapters.",
+            "confirmed": True,
+            "demo": bool(action.demo_mode or get_settings().demo_mode),
+            "content": content,
+            "note": "Content update stored on action result; not published until a publish action runs.",
         }
+
+    async def _exec_generate_report(self, action: AIAction) -> dict:
+        if not action.client_id:
+            return {"confirmed": False, "error": "CLIENT_REQUIRED"}
+        period_days = int((action.payload or {}).get("period_days") or 7)
+        job = await JobQueue(self.db).enqueue(
+            job_type=REPORT_GENERATE,
+            payload={
+                "client_id": str(action.client_id),
+                "user_id": str(action.approved_by) if action.approved_by else None,
+                "period_days": period_days,
+                "action_id": str(action.id),
+            },
+            organization_id=action.organization_id,
+            dedupe_key=execution_idempotency_key(action.id),
+        )
+        demo = bool(action.demo_mode or get_settings().demo_mode)
+        return {
+            "confirmed": True,
+            "demo": demo,
+            "job_id": str(job.id),
+            "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+            "note": "Report generation queued for background worker.",
+        }
+
+    async def _exec_ads_mutation(self, action: AIAction) -> dict:
+        """Ads mutations delegate to AdsExecutor — real platform confirmation required."""
+        campaign = await self._get_campaign(action)
+        if action.target_id and campaign is None:
+            # target may be opaque platform id; still attempt executor path
+            pass
+        elif action.target_id and campaign and action.client_id and campaign.client_id != action.client_id:
+            return {"confirmed": False, "error": "TENANT_MISMATCH"}
+
+        if action.action_type == AIActionType.pause_campaign and campaign:
+            action.previous_state = {"status": campaign.status}
+
+        result = await AdsExecutor(self.db).execute(action, campaign=campaign)
+        payload = result.to_dict()
+        payload["action_type"] = action.action_type.value
+        return payload
 
     async def _get_campaign(self, action: AIAction) -> Campaign | None:
         try:
@@ -463,8 +508,11 @@ class RollbackHandler:
             return {"success": False, "message": "ROLLBACK NOT AVAILABLE"}
         if action.action_type == AIActionType.pause_campaign and action.previous_state.get("status") and action.target_id:
             camp = await ExecutionEngine(self.db)._get_campaign(action)
-            if camp:
-                camp.status = action.previous_state["status"]
-                await self.db.flush()
-                return {"success": True, "message": "Local campaign status restored.", "demo": action.demo_mode}
+            if not camp:
+                return {"success": False, "message": "TARGET_NOT_FOUND"}
+            if action.client_id and camp.client_id != action.client_id:
+                return {"success": False, "message": "TENANT_MISMATCH"}
+            camp.status = action.previous_state["status"]
+            await self.db.flush()
+            return {"success": True, "message": "Local campaign status restored.", "demo": action.demo_mode}
         return {"success": False, "message": "ROLLBACK NOT AVAILABLE"}
