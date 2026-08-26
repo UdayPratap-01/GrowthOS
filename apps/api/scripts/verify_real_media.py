@@ -39,6 +39,7 @@ import base64
 import os
 import struct
 import sys
+import time
 import uuid
 import zlib
 from contextlib import contextmanager
@@ -341,11 +342,38 @@ async def advance_scheduled_jobs() -> int:
         return result.rowcount or 0
 
 
-async def drain_queue(*, max_cycles: int = 60, follow_scheduled: bool = True) -> int:
+async def drain_queue(
+    *,
+    max_cycles: int | None = 60,
+    follow_scheduled: bool = True,
+    timeout_seconds: float | None = None,
+) -> int:
+    """
+    Drive the worker until the queue is idle or a budget is exhausted.
+
+    Cycle counts alone are a poor bound for async video: `advance_scheduled_jobs`
+    collapses provider poll backoff, so 60 cycles can elapse in ~30s while the
+    vendor is still generating. Prefer a wall-clock `timeout_seconds` (typically
+    `video_job_timeout_seconds`) when waiting on real predictions. At least one
+    of `max_cycles` or `timeout_seconds` must be set so a hung provider cannot
+    loop forever.
+    """
+    if max_cycles is None and timeout_seconds is None:
+        raise ValueError("drain_queue requires max_cycles and/or timeout_seconds")
+
     worker = Worker(batch_size=10, poll_interval=0.0, lease_seconds=120)
     executed = 0
     idle = 0
-    for _ in range(max_cycles):
+    cycles = 0
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+
+    while True:
+        if max_cycles is not None and cycles >= max_cycles:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        cycles += 1
+
         count = await worker.run_once()
         executed += count
         if count == 0:
@@ -563,7 +591,13 @@ async def phase_media_chain(report: Report, *, mode: str, recorder: RecordingTra
                 return
             run_id = started.json()["id"]
 
-            executed = await drain_queue()
+            # Async video often needs minutes. Advancing scheduled polls makes
+            # each cycle fast, so a small cycle cap ends long before the vendor
+            # (or the production video_job_timeout_seconds deadline) would.
+            executed = await drain_queue(
+                max_cycles=None,
+                timeout_seconds=float(get_settings().video_job_timeout_seconds),
+            )
             report.check(executed > 0, f"the worker ran the jobs out of band ({executed} job runs)")
 
             run = (await http.get(f"/api/v1/campaign-generation/runs/{run_id}", headers=owner)).json()
