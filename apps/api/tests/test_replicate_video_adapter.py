@@ -202,6 +202,104 @@ async def test_provider_input_meta_is_merged_into_input(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# LTX model aspect_ratio capabilities (vendor schema: 16:9 | 9:16 only)
+# ---------------------------------------------------------------------------
+
+LTX_MODEL = "lightricks/ltx-2.5-fast"
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("lightricks/ltx-2.5-fast", True),
+        ("lightricks/ltx-2", True),
+        ("Lightricks/LTX-2.5-Fast", True),
+        ("lightricks/ltx-2.5-fast:deadbeef", True),
+        ("acme/demo-video", False),
+        (VERSION_HASH, False),
+        ("runwayml/gen-4.5", False),
+        ("", False),
+    ],
+)
+def test_is_ltx_video_model(model: str, expected: bool) -> None:
+    from app.generation.media_utils import is_ltx_video_model
+
+    assert is_ltx_video_model(model) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aspect", ["16:9", "9:16"])
+async def test_ltx_accepts_supported_aspect_ratios(monkeypatch, aspect: str):
+    vendor = _install(monkeypatch, RecordingVendor())
+    result = await _provider(model=LTX_MODEL).generate_video(
+        prompt="ltx ok",
+        duration_seconds=10,
+        aspect_ratio=aspect,
+    )
+    assert result.success is True
+    assert result.error_code is None
+    assert len(vendor.posts()) == 1
+    assert _json(vendor.posts()[0])["input"]["aspect_ratio"] == aspect
+    assert _json(vendor.posts()[0])["input"]["duration"] == 10
+    assert _json(vendor.posts()[0])["input"]["prompt"] == "ltx ok"
+
+
+@pytest.mark.asyncio
+async def test_ltx_rejects_1_1_before_http(monkeypatch):
+    vendor = _install(monkeypatch, RecordingVendor())
+    result = await _provider(model=LTX_MODEL).generate_video(
+        prompt="ltx square",
+        duration_seconds=10,
+        aspect_ratio="1:1",
+    )
+    assert result.success is False
+    assert result.error_code == "UNSUPPORTED_ASPECT_RATIO"
+    assert result.retryable is False
+    assert result.external_id is None
+    assert "1:1" in (result.error or "")
+    assert vendor.posts() == []
+    assert vendor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ltx_rejects_provider_input_override_1_1_before_http(monkeypatch):
+    vendor = _install(monkeypatch, RecordingVendor())
+    result = await _provider(model=LTX_MODEL).generate_video(
+        prompt="ltx override",
+        aspect_ratio="9:16",
+        meta={"provider_input": {"aspect_ratio": "1:1"}},
+    )
+    assert result.success is False
+    assert result.error_code == "UNSUPPORTED_ASPECT_RATIO"
+    assert result.retryable is False
+    assert vendor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_non_ltx_model_still_allows_1_1(monkeypatch):
+    vendor = _install(monkeypatch, RecordingVendor())
+    result = await _provider(model="acme/demo-video").generate_video(
+        prompt="square ok elsewhere",
+        aspect_ratio="1:1",
+    )
+    assert result.success is True
+    assert len(vendor.posts()) == 1
+    assert _json(vendor.posts()[0])["input"]["aspect_ratio"] == "1:1"
+
+
+@pytest.mark.asyncio
+async def test_version_hash_model_not_restricted_to_ltx_ratios(monkeypatch):
+    """Opaque version hashes cannot be classified as LTX — do not invent a gate."""
+    vendor = _install(monkeypatch, RecordingVendor())
+    result = await _provider(model=VERSION_HASH).generate_video(
+        prompt="hash square",
+        aspect_ratio="1:1",
+    )
+    assert result.success is True
+    assert len(vendor.posts()) == 1
+
+
+# ---------------------------------------------------------------------------
 # Submission error mapping
 # ---------------------------------------------------------------------------
 

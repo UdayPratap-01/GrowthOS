@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from typing import Any
@@ -14,6 +15,7 @@ from app.ai.providers.base import AIProvider, AIResponse, Message
 #: join on.
 _REFERENCE_LIST = re.compile(r"in order:\s*([A-Z](?:\s*,\s*[A-Z])*)")
 _CONCEPT_ID = re.compile(r"'concept_id':\s*'([A-Za-z0-9]+)'")
+_ASPECT_RATIOS = re.compile(r"Aspect ratios to design for:\s*(\[[^\]]*\])")
 
 
 def _references_from_prompt(raw: str, *, default: tuple[str, ...] = ("A", "B", "C")) -> list[str]:
@@ -22,6 +24,20 @@ def _references_from_prompt(raw: str, *, default: tuple[str, ...] = ("A", "B", "
         return [part.strip() for part in listed.group(1).split(",") if part.strip()]
     found = list(dict.fromkeys(_CONCEPT_ID.findall(raw)))
     return found or list(default)
+
+
+def _aspect_ratios_from_prompt(raw: str) -> list[str] | None:
+    """Echo the ratios the concept agent was asked to design for, when present."""
+    match = _ASPECT_RATIOS.search(raw or "")
+    if not match:
+        return None
+    try:
+        value = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+        return list(value)
+    return None
 
 
 class MockAIProvider(AIProvider):
@@ -329,7 +345,9 @@ class MockAIProvider(AIProvider):
             payload = _copy_pack_payload(_references_from_prompt(raw_prompt))
         elif schema and schema.__name__ == "CreativeConceptPack":
             payload = _concept_pack_payload(
-                _references_from_prompt(raw_prompt), needs_video="video_prompt`: a single" in raw_prompt
+                _references_from_prompt(raw_prompt),
+                needs_video="video_prompt`: a single" in raw_prompt,
+                aspect_ratios=_aspect_ratios_from_prompt(raw_prompt),
             )
         elif schema and schema.__name__ == "VariationPack":
             payload = _variation_pack_payload(raw_prompt)
@@ -596,7 +614,13 @@ _VISUAL_SET = (
 )
 
 
-def _concept_pack_payload(references: list[str], *, needs_video: bool) -> dict[str, Any]:
+def _concept_pack_payload(
+    references: list[str],
+    *,
+    needs_video: bool,
+    aspect_ratios: list[str] | None = None,
+) -> dict[str, Any]:
+    ratios = list(aspect_ratios) if aspect_ratios else ["1:1"]
     specs = []
     for index, reference in enumerate(references):
         visual = _VISUAL_SET[index % len(_VISUAL_SET)]
@@ -613,7 +637,7 @@ def _concept_pack_payload(references: list[str], *, needs_video: bool) -> dict[s
                     "brand_elements": ["Brand colour palette", "Brand typography for the overlay"],
                     "text_overlay": visual["text_overlay"],
                 },
-                "aspect_ratios": ["1:1"],
+                "aspect_ratios": ratios,
                 "image_prompt": (
                     f"{visual['subject']}, {visual['environment']}. {visual['composition']}. "
                     f"{visual['lighting']}. {visual['style']}. Deliberate negative space for a "

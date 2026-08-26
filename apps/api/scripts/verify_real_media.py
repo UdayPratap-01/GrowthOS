@@ -544,6 +544,11 @@ async def phase_media_chain(report: Report, *, mode: str, recorder: RecordingTra
                     "offer": "Free storm damage inspection",
                     "daily_budget": "120.00",
                     "currency": "USD",
+                    # Prefer a vertical ratio the campaign will hand to video
+                    # jobs. Mock concepts often default to 1:1; LTX (and some
+                    # other vendors) reject square — keep the fixture
+                    # provider-compatible without changing product defaults.
+                    "aspect_ratios": ["9:16"],
                     # The minimum that proves the chain. Every unit here is a
                     # real vendor charge in VENDOR mode.
                     "concept_quantity": 1,

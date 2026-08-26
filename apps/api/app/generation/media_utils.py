@@ -59,6 +59,41 @@ def is_gpt_image_model(model: str) -> bool:
     return "gpt-image" in (model or "").strip().lower()
 
 
+# Lightricks LTX on Replicate accepts only these two ratios (vendor schema).
+# Other Replicate video models are not constrained by this allowlist.
+LTX_SUPPORTED_ASPECT_RATIOS = frozenset({"16:9", "9:16"})
+
+
+def is_ltx_video_model(model: str) -> bool:
+    """
+    True for Lightricks LTX video models addressed by owner/name (optional :version).
+
+    Version-hash-only ids cannot be classified here; those stay unrestricted so
+    we never invent a capability gate from an opaque hash.
+    """
+    slug = (model or "").strip().lower().split(":", 1)[0]
+    return "ltx-" in slug or slug.endswith("/ltx")
+
+
+def replicate_video_aspect_ratio_error(aspect: str, model: str) -> str | None:
+    """
+    Return a clear error string when this Replicate model rejects `aspect`, else None.
+
+    Non-LTX models (and unclassifiable version hashes) are not restricted — 1:1
+    remains valid for providers that support it.
+    """
+    if not is_ltx_video_model(model):
+        return None
+    ratio = (aspect or "").strip()
+    if ratio in LTX_SUPPORTED_ASPECT_RATIOS:
+        return None
+    allowed = ", ".join(sorted(LTX_SUPPORTED_ASPECT_RATIOS))
+    return (
+        f"aspect_ratio {ratio!r} is not supported by this video model; "
+        f"supported values are {allowed}"
+    )
+
+
 def openai_image_size(aspect: str, model: str = "") -> str:
     a = (aspect or "1:1").strip()
     if is_gpt_image_model(model):

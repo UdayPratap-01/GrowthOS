@@ -6,7 +6,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.generation.base import GenerationResult, VideoGenerationProvider
-from app.generation.media_utils import is_valid_video
+from app.generation.media_utils import is_valid_video, replicate_video_aspect_ratio_error
 
 
 class ReplicateVideoProvider(VideoGenerationProvider):
@@ -40,6 +40,22 @@ class ReplicateVideoProvider(VideoGenerationProvider):
                 retryable=False,
             )
 
+        # Model-specific gate before any vendor HTTP call. provider_input may
+        # override aspect_ratio on the wire, so validate the effective value.
+        provider_input = dict((meta or {}).get("provider_input") or {})
+        wire_aspect = str(provider_input.get("aspect_ratio", aspect_ratio))
+        aspect_error = replicate_video_aspect_ratio_error(wire_aspect, self.model)
+        if aspect_error:
+            return GenerationResult(
+                success=False,
+                status="failed",
+                provider=self.name,
+                message="Unsupported aspect ratio for this video model",
+                error=aspect_error,
+                error_code="UNSUPPORTED_ASPECT_RATIO",
+                retryable=False,
+            )
+
         headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "application/json",
@@ -56,7 +72,7 @@ class ReplicateVideoProvider(VideoGenerationProvider):
                     "prompt": prompt,
                     "aspect_ratio": aspect_ratio,
                     "duration": duration_seconds,
-                    **((meta or {}).get("provider_input") or {}),
+                    **provider_input,
                 }
             }
         else:
@@ -67,7 +83,7 @@ class ReplicateVideoProvider(VideoGenerationProvider):
                     "prompt": prompt,
                     "aspect_ratio": aspect_ratio,
                     "duration": duration_seconds,
-                    **((meta or {}).get("provider_input") or {}),
+                    **provider_input,
                 },
             }
 
