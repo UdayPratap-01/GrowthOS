@@ -8,9 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.agents.creative_agent import CreativeRequest
 from app.ai.orchestrator import get_orchestrator
 from app.core.config import get_settings
-from app.generation import get_image_provider, get_video_provider
-from app.models.automation import CreativeAsset, ImageJob, VideoJob
-from app.models.enums import AIActionType, JobStatus, Priority
+from app.models.automation import CreativeAsset
+from app.models.enums import AIActionType, Priority
 from app.schemas.autopilot import (
     AIActionCreate,
     CreativeAssetOut,
@@ -20,6 +19,8 @@ from app.schemas.autopilot import (
 )
 from app.services.action_service import ActionService
 from app.services.client_service import ClientService
+from app.services.media_generation_service import MediaGenerationService
+from app.storage import key_belongs_to_organization
 
 
 class CreativeService:
@@ -47,7 +48,7 @@ class CreativeService:
                 name=concept.headline[:255],
                 asset_type="concept",
                 platform=data.platform,
-                prompt=data.topic,
+                prompt=data.topic or concept.visual_concept,
                 provider="creative_agent",
                 status="draft",
                 content=concept.model_dump(),
@@ -62,7 +63,7 @@ class CreativeService:
             self.db.add(row)
             await self.db.flush()
             await self.db.refresh(row)
-            assets.append(CreativeAssetOut.model_validate(row))
+            assets.append(self._asset_out(row))
 
         await ActionService(self.db).create(
             organization.id,
@@ -74,7 +75,7 @@ class CreativeService:
                 description=f"Generated {len(assets)} creative concepts for {data.platform}",
                 reason="Creative automation request",
                 evidence=[{"count": len(assets), "format": data.format}],
-                expected_impact="Ready for approval / image generation",
+                expected_impact="Ready for image/video generation",
                 priority=Priority.medium,
                 payload={"creative_asset_ids": [str(a.id) for a in assets]},
             ),
@@ -92,98 +93,72 @@ class CreativeService:
         if client_id:
             stmt = stmt.where(CreativeAsset.client_id == client_id)
         rows = (await self.db.execute(stmt)).scalars().all()
-        return [CreativeAssetOut.model_validate(r) for r in rows]
+        return [self._asset_out(r) for r in rows]
 
     async def generate_image(self, organization, data: ImageGenerateRequest, *, user_id: UUID) -> dict:
-        provider = get_image_provider()
-        job = ImageJob(
-            organization_id=organization.id,
+        media = MediaGenerationService(self.db)
+        result = await media.enqueue_images(
+            organization,
             client_id=data.client_id,
-            provider=provider.name,
             prompt=data.prompt,
-            status=JobStatus.queued,
+            aspect_ratio="1:1",
+            quantity=1,
+            platform=data.platform,
         )
-        self.db.add(job)
-        await self.db.flush()
-
-        result = await provider.generate_image(prompt=data.prompt)
-        job.status = JobStatus.completed if result.success else JobStatus.failed
-        job.result = {"message": result.message, "assets": result.assets, "demo": result.demo}
-        job.error = result.error
-        await self.db.flush()
-
-        action = await ActionService(self.db).create(
-            organization.id,
-            AIActionCreate(
-                action_type=AIActionType.generate_image,
-                client_id=data.client_id,
-                agent="CreativeAgent",
-                platform=data.platform,
-                description=f"Image generation: {data.prompt[:120]}",
-                reason="Image generation request",
-                evidence=[{"job_id": str(job.id), "provider": provider.name}],
-                payload={"prompt": data.prompt, "job_id": str(job.id)},
-            ),
-            user_id=user_id,
-        )
-        return {
-            "job_id": str(job.id),
-            "status": job.status.value,
-            "message": result.message,
-            "demo": result.demo,
-            "action_id": str(action.id),
-            "error": result.error,
-        }
+        if result.get("job_id"):
+            await ActionService(self.db).create(
+                organization.id,
+                AIActionCreate(
+                    action_type=AIActionType.generate_image,
+                    client_id=data.client_id,
+                    agent="CreativeAgent",
+                    platform=data.platform,
+                    description=f"Image generation: {data.prompt[:120]}",
+                    reason="Image generation request",
+                    evidence=[{"job_id": result.get("job_id")}],
+                    payload={"prompt": data.prompt, "job_id": result.get("job_id")},
+                ),
+                user_id=user_id,
+            )
+        return result
 
     async def generate_video(self, organization, data: VideoGenerateRequest, *, user_id: UUID) -> dict:
-        provider = get_video_provider()
-        job = VideoJob(
-            organization_id=organization.id,
+        media = MediaGenerationService(self.db)
+        result = await media.enqueue_video(
+            organization,
             client_id=data.client_id,
-            provider=provider.name,
             prompt=data.prompt,
-            status=JobStatus.queued,
+            platform=data.platform,
         )
-        self.db.add(job)
-        await self.db.flush()
-        result = await provider.generate_video(prompt=data.prompt)
-        job.status = JobStatus.completed if result.success else JobStatus.failed
-        job.result = {"message": result.message, "assets": result.assets, "demo": result.demo}
-        job.error = result.error
-        await self.db.flush()
-        action = await ActionService(self.db).create(
-            organization.id,
-            AIActionCreate(
-                action_type=AIActionType.generate_video,
-                client_id=data.client_id,
-                agent="CreativeAgent",
-                platform=data.platform,
-                description=f"Video generation: {data.prompt[:120]}",
-                reason="Video generation request",
-                evidence=[{"job_id": str(job.id), "provider": provider.name}],
-                payload={"prompt": data.prompt, "job_id": str(job.id)},
-            ),
-            user_id=user_id,
-        )
-        return {
-            "job_id": str(job.id),
-            "status": job.status.value,
-            "message": result.message,
-            "demo": result.demo,
-            "action_id": str(action.id),
-            "error": result.error,
-        }
+        if result.get("job_id"):
+            await ActionService(self.db).create(
+                organization.id,
+                AIActionCreate(
+                    action_type=AIActionType.generate_video,
+                    client_id=data.client_id,
+                    agent="CreativeAgent",
+                    platform=data.platform,
+                    description=f"Video generation: {data.prompt[:120]}",
+                    reason="Video generation request",
+                    evidence=[{"job_id": result.get("job_id")}],
+                    payload={"prompt": data.prompt, "job_id": result.get("job_id")},
+                ),
+                user_id=user_id,
+            )
+        return result
 
     async def get_video_job(self, organization_id: UUID, job_id: UUID) -> dict:
-        job = await self.db.scalar(
-            select(VideoJob).where(VideoJob.id == job_id, VideoJob.organization_id == organization_id)
-        )
-        if not job:
-            return {"error": "NOT_FOUND"}
-        return {
-            "id": str(job.id),
-            "status": job.status.value,
-            "provider": job.provider,
-            "result": job.result,
-            "error": job.error,
-        }
+        return await MediaGenerationService(self.db).get_video_job(organization_id, job_id, poll=True)
+
+    def _asset_out(self, row: CreativeAsset) -> CreativeAssetOut:
+        data = CreativeAssetOut.model_validate(row)
+        # Ownership is checked from the key rather than by probing storage: a
+        # HEAD request per row would turn a list into one round-trip per asset.
+        # The media endpoint confirms existence when the bytes are actually read.
+        if row.status == "completed" and key_belongs_to_organization(
+            row.storage_key, row.organization_id
+        ):
+            payload = data.model_dump()
+            payload["url"] = f"/api/v1/creative/media/{row.id}"
+            return CreativeAssetOut.model_validate(payload)
+        return data

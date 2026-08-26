@@ -5,6 +5,7 @@ class MemberRole(str, enum.Enum):
     owner = "owner"
     admin = "admin"
     member = "member"
+    viewer = "viewer"
 
 
 class ClientStatus(str, enum.Enum):
@@ -106,11 +107,18 @@ class RiskLevel(str, enum.Enum):
 
 class JobStatus(str, enum.Enum):
     queued = "queued"
+    submitted = "submitted"
+    generating = "generating"
+    processing = "processing"
+    downloading = "downloading"
+    uploading = "uploading"
     running = "running"
     waiting_approval = "waiting_approval"
     scheduled = "scheduled"
     completed = "completed"
     failed = "failed"
+    # Transient failure awaiting its next attempt (run_after gates the retry).
+    retrying = "retrying"
     cancelled = "cancelled"
 
 

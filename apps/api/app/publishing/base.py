@@ -14,6 +14,13 @@ class PublishResult:
     platform_response: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     demo: bool = False
+    # DEMO_DATA | DEMO_EXECUTION | REAL_EXECUTION — never infer this from `success`.
+    execution_mode: str = "REAL_EXECUTION"
+
+    @property
+    def is_real_publish(self) -> bool:
+        """True only when a platform confirmed the write and returned an ID."""
+        return bool(self.success and not self.demo and self.external_id)
 
 
 class SocialPublisher(ABC):

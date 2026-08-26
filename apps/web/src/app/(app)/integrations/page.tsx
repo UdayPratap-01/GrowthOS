@@ -58,6 +58,15 @@ function IntegrationsInner() {
   async function connect(provider: string) {
     setBusy(provider);
     setError(null);
+    // Optimistic "connecting" until the OAuth redirect completes or fails.
+    // Success is only confirmed after the callback returns connected.
+    setItems((prev) =>
+      prev.map((item) =>
+        item.provider === provider
+          ? { ...item, status: "connecting", message: "Redirecting to the provider…" }
+          : item,
+      ),
+    );
     try {
       const qs = clientId ? `?client_id=${clientId}` : "";
       const result = await api<{ authorize_url: string }>(`/integrations/${provider}/connect${qs}`, {
@@ -67,6 +76,7 @@ function IntegrationsInner() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connect failed");
       setBusy(null);
+      await load();
     }
   }
 
@@ -94,6 +104,19 @@ function IntegrationsInner() {
       const qs = clientId ? `?client_id=${clientId}` : "";
       await api(`/integrations/${provider}/disconnect${qs}`, { method: "POST" });
       setNotice(`${provider} disconnected.`);
+      // Reflect disconnected immediately; the next load confirms server state.
+      setItems((prev) =>
+        prev.map((item) =>
+          item.provider === provider
+            ? {
+                ...item,
+                status: "disconnected",
+                message: "Disconnected. Tokens have been cleared server-side.",
+                last_synced_at: null,
+              }
+            : item,
+        ),
+      );
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Disconnect failed");
@@ -131,7 +154,7 @@ function IntegrationsInner() {
       <Card>
         <CardHeader
           title="Platform adapters"
-          subtitle="Statuses: Connected · Not Connected · Demo Data · Sync Error"
+          subtitle="Statuses: Not connected · Connecting · Connected · Sync error · Disconnected · Demo data"
         />
         <div className="space-y-3">
           {items.map((item) => {
@@ -161,9 +184,16 @@ function IntegrationsInner() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusDot status={item.status} label={item.status.replaceAll("_", " ")} />
-                  {item.can_connect ? (
-                    <Button size="sm" disabled={busy === item.provider} onClick={() => connect(item.provider)}>
-                      {busy === item.provider ? "Redirecting..." : "Connect"}
+                  {item.can_connect &&
+                  (item.status === "not_connected" ||
+                    item.status === "disconnected" ||
+                    item.status === "connecting") ? (
+                    <Button
+                      size="sm"
+                      disabled={busy === item.provider || item.status === "connecting"}
+                      onClick={() => connect(item.provider)}
+                    >
+                      {item.status === "connecting" || busy === item.provider ? "Connecting…" : "Connect"}
                     </Button>
                   ) : null}
                   {item.status === "connected" || item.status === "sync_error" ? (

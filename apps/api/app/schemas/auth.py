@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -17,8 +18,30 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
+    #: Omitted for browser clients: they get the refresh token as an httpOnly
+    #: cookie instead, which JavaScript cannot read. Populated only for clients
+    #: that asked for body delivery and are not using the cookie.
+    refresh_token: str | None = None
     token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    """Optional: browsers send the token in an httpOnly cookie instead."""
+
+    refresh_token: str | None = None
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = None
+
+
+class SessionOut(BaseModel):
+    """An active refresh token, so a user can see and revoke their sessions."""
+
+    id: UUID
+    created_at: datetime
+    expires_at: datetime
+    user_agent: str | None = None
 
 
 class UserOut(BaseModel):

@@ -20,18 +20,27 @@ export default function AIStrategyPage() {
 
   useEffect(() => {
     (async () => {
-      const list = await api<Client[]>("/clients");
-      setClients(list);
-      if (list[0]) setClientId(list[0].id);
-      setLoading(false);
+      try {
+        const list = await api<Client[]>("/clients");
+        setClients(list);
+        if (list[0]) setClientId(list[0].id);
+      } catch {
+        // 401 handled by api() → login redirect
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
   useEffect(() => {
     if (!clientId) return;
     (async () => {
-      const list = await api<Strategy[]>(`/clients/${clientId}/strategies`);
-      setStrategy(list[0] || null);
+      try {
+        const list = await api<Strategy[]>(`/clients/${clientId}/strategies`);
+        setStrategy(list[0] || null);
+      } catch {
+        setStrategy(null);
+      }
     })();
   }, [clientId]);
 

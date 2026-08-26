@@ -16,6 +16,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: growthos-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build:
       context: ./apps/api
@@ -23,16 +34,62 @@ services:
     ports:
       - "8000:8000"
     environment:
+      ENVIRONMENT: development
       DEMO_MODE: "true"
+      ALLOW_DEMO_SEED: "true"
       API_CORS_ORIGINS: http://localhost:3000
       DATABASE_URL: postgresql+asyncpg://growthos:growthos@db:5432/growthos
       DATABASE_URL_SYNC: postgresql://growthos:growthos@db:5432/growthos
       SECRET_KEY: docker-dev-secret-change-me
       ENCRYPTION_KEY: change-me-32-byte-fernet-compatible-key!!
       AI_PROVIDER: mock
+      IMAGE_PROVIDER: demo
+      VIDEO_PROVIDER: none
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: ./storage
+      REDIS_URL: redis://redis:6379/0
       RATE_LIMIT_PER_MINUTE: "120"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=4).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Same image, different command. Long media/report generation runs here so it
+  # never occupies an HTTP request and survives an API restart.
+  worker:
+    build:
+      context: ./apps/api
+    container_name: growthos-worker
+    command: ["python", "-m", "app.worker"]
+    environment:
+      ENVIRONMENT: development
+      DEMO_MODE: "true"
+      INLINE_JOB_EXECUTION: "false"
+      DATABASE_URL: postgresql+asyncpg://growthos:growthos@db:5432/growthos
+      DATABASE_URL_SYNC: postgresql://growthos:growthos@db:5432/growthos
+      SECRET_KEY: docker-dev-secret-change-me
+      ENCRYPTION_KEY: change-me-32-byte-fernet-compatible-key!!
+      AI_PROVIDER: mock
+      IMAGE_PROVIDER: demo
+      VIDEO_PROVIDER: none
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: ./storage
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

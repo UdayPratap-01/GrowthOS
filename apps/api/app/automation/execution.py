@@ -12,12 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.automation.action_types import FINANCIAL_ACTIONS, get_action_spec
 from app.automation.safety import ActionValidator, PermissionChecker
 from app.core.config import get_settings
-from app.generation import get_image_provider, get_video_provider
 from app.integrations.persistence import get_integration_row
 from app.models.ai_ops import Notification
 from app.models.automation import ActionExecution, AIAction, AutonomySettings, CreativeAsset, ScheduledPost
 from app.models.enums import AIActionStatus, AIActionType, AutonomyMode
 from app.models.marketing import Campaign
+from app.models.organization import Organization
 from app.publishing import get_publisher
 from app.security.audit import write_audit
 
@@ -171,65 +171,61 @@ class ExecutionEngine:
         return {"confirmed": False, "error": f"UNSUPPORTED_ACTION:{t.value}"}
 
     async def _exec_image(self, action: AIAction) -> dict:
-        provider = get_image_provider()
+        if not action.client_id:
+            return {"confirmed": False, "error": "CLIENT_REQUIRED"}
+        from app.services.media_generation_service import MediaGenerationService
+
+        org = await self.db.get(Organization, action.organization_id)
+        if not org:
+            return {"confirmed": False, "error": "ORG_NOT_FOUND"}
         prompt = (action.payload or {}).get("prompt") or action.description
-        result = await provider.generate_image(prompt=prompt, meta=action.payload or {})
-        if not result.success and result.error == "IMAGE GENERATION NOT CONFIGURED":
-            return {"confirmed": False, "error": "IMAGE GENERATION NOT CONFIGURED"}
-        if action.client_id:
-            asset = CreativeAsset(
-                organization_id=action.organization_id,
-                client_id=action.client_id,
-                name=f"Image concept — {action.description[:80]}",
-                asset_type="image" if not result.demo else "concept",
-                platform=action.platform,
-                prompt=prompt,
-                provider=result.provider,
-                status="completed" if result.success else "failed",
-                content={"assets": result.assets},
-                meta={"message": result.message},
-                data_source="demo" if result.demo else "live",
-            )
-            self.db.add(asset)
-            await self.db.flush()
-            return {
-                "confirmed": result.success,
-                "demo": result.demo,
-                "creative_asset_id": str(asset.id),
-                "message": result.message,
-                "error": result.error,
-            }
-        return {"confirmed": result.success, "demo": result.demo, "message": result.message, "error": result.error}
+        result = await MediaGenerationService(self.db).enqueue_images(
+            org,
+            client_id=action.client_id,
+            prompt=prompt,
+            aspect_ratio=(action.payload or {}).get("aspect_ratio") or "1:1",
+            quantity=1,
+            platform=action.platform,
+            idempotency_key=(action.payload or {}).get("idempotency_key") or f"action:{action.id}",
+        )
+        ok = result.get("status") == "COMPLETED" and bool(result.get("assets"))
+        return {
+            "confirmed": ok,
+            "demo": bool(result.get("demo")),
+            "job_id": result.get("job_id"),
+            "assets": result.get("assets") or [],
+            "message": result.get("message"),
+            "error": result.get("error") if not ok else None,
+        }
 
     async def _exec_video(self, action: AIAction) -> dict:
-        provider = get_video_provider()
+        if not action.client_id:
+            return {"confirmed": False, "error": "CLIENT_REQUIRED"}
+        from app.services.media_generation_service import MediaGenerationService
+
+        org = await self.db.get(Organization, action.organization_id)
+        if not org:
+            return {"confirmed": False, "error": "ORG_NOT_FOUND"}
         prompt = (action.payload or {}).get("prompt") or action.description
-        result = await provider.generate_video(prompt=prompt, meta=action.payload or {})
-        if not result.success and result.error == "VIDEO GENERATION NOT CONFIGURED":
-            return {"confirmed": False, "error": "VIDEO GENERATION NOT CONFIGURED"}
-        if action.client_id:
-            asset = CreativeAsset(
-                organization_id=action.organization_id,
-                client_id=action.client_id,
-                name=f"Video concept — {action.description[:80]}",
-                asset_type="video" if not result.demo else "concept",
-                platform=action.platform,
-                prompt=prompt,
-                provider=result.provider,
-                status="completed" if result.success else "failed",
-                content={"assets": result.assets},
-                meta={"message": result.message},
-                data_source="demo" if result.demo else "live",
-            )
-            self.db.add(asset)
-            await self.db.flush()
-            return {
-                "confirmed": result.success,
-                "demo": result.demo,
-                "creative_asset_id": str(asset.id),
-                "message": result.message,
-            }
-        return {"confirmed": result.success, "demo": result.demo, "message": result.message, "error": result.error}
+        result = await MediaGenerationService(self.db).enqueue_video(
+            org,
+            client_id=action.client_id,
+            prompt=prompt,
+            aspect_ratio=(action.payload or {}).get("aspect_ratio") or "9:16",
+            duration_seconds=int((action.payload or {}).get("duration_seconds") or 10),
+            platform=action.platform,
+            idempotency_key=(action.payload or {}).get("idempotency_key") or f"action:{action.id}",
+        )
+        ok = result.get("status") == "COMPLETED" and bool(result.get("assets"))
+        return {
+            "confirmed": ok,
+            "demo": bool(result.get("demo")),
+            "job_id": result.get("job_id"),
+            "provider_job_id": result.get("provider_job_id"),
+            "assets": result.get("assets") or [],
+            "message": result.get("message"),
+            "error": result.get("error") if not ok else None,
+        }
 
     async def _exec_creative(self, action: AIAction) -> dict:
         if not action.client_id:

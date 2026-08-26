@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import ai_limit
 from app.schemas.competitor import CompetitorCreate, CompetitorOut, CompetitorUpdate
 from app.services.competitor_service import CompetitorService
 
@@ -20,11 +22,11 @@ async def list_competitors(
     return await CompetitorService(db).list(auth.organization_id, client_id)
 
 
-@router.post("", response_model=CompetitorOut, status_code=201)
+@router.post("", response_model=CompetitorOut, status_code=201, dependencies=[Depends(ai_limit)])
 async def create_competitor(
     client_id: UUID,
     data: CompetitorCreate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.client_write)),
     db: AsyncSession = Depends(get_db),
 ) -> CompetitorOut:
     return await CompetitorService(db).create(auth.organization_id, client_id, data)
@@ -35,7 +37,7 @@ async def update_competitor(
     client_id: UUID,
     competitor_id: UUID,
     data: CompetitorUpdate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.client_write)),
     db: AsyncSession = Depends(get_db),
 ) -> CompetitorOut:
     return await CompetitorService(db).update(auth.organization_id, client_id, competitor_id, data)
@@ -45,7 +47,7 @@ async def update_competitor(
 async def delete_competitor(
     client_id: UUID,
     competitor_id: UUID,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.client_write)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     await CompetitorService(db).delete(auth.organization_id, client_id, competitor_id)

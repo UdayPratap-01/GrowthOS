@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import ai_limit
 from app.models.enums import RecommendationStatus
 from app.schemas.recommendation import (
     RecommendationCreate,
@@ -30,16 +32,16 @@ async def list_recommendations(
 @router.post("", response_model=RecommendationOut, status_code=201)
 async def create_recommendation(
     data: RecommendationCreate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> RecommendationOut:
     return await RecommendationService(db).create(auth.organization_id, auth.user_id, data)
 
 
-@router.post("/generate", response_model=list[RecommendationOut])
+@router.post("/generate", response_model=list[RecommendationOut], dependencies=[Depends(ai_limit)])
 async def generate_recommendations(
     data: RecommendationGenerateRequest | None = None,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> list[RecommendationOut]:
     client_id = data.client_id if data else None
@@ -52,7 +54,7 @@ async def generate_recommendations(
 async def update_recommendation_status(
     recommendation_id: UUID,
     data: RecommendationStatusUpdate,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> RecommendationOut:
     return await RecommendationService(db).update_status(

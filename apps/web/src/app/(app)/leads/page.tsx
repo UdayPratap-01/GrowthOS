@@ -32,7 +32,7 @@ export default function LeadsPage() {
     <div className="space-y-6 animate-rise">
       <div>
         <h1 className="font-display text-3xl">Leads</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">CRM with AI scoring, kanban, and table views.</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">CRM with deterministic rule-based scoring, kanban, and table views.</p>
       </div>
       <Card>
         <CardHeader title="Open client CRM" />

@@ -54,5 +54,9 @@ async def lead_score_overview(
         medium_intent=len([l for l in scored if 50 <= (l.lead_score or 0) < 75]),
         low_intent=len([l for l in scored if (l.lead_score or 0) < 50]),
         top_leads=[LeadOut.model_validate(l) for l in scored[:10]],
-        data_note="Scores use available CRM fields only. Behavioral events unavailable unless recorded as activities.",
+        data_note=(
+            "Deterministic rule-based scoring — no AI model is used. Scores are computed from recorded CRM "
+            "fields only. Website visits, pricing-page views, email opens and form behaviour are not tracked "
+            "and are never inferred."
+        ),
     )

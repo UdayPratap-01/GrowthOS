@@ -11,6 +11,7 @@ from app.models.organization import Organization
 from app.repositories.client_repo import ClientRepository
 from app.schemas.client import ClientContext, ClientCreate, ClientOut, ClientUpdate
 from app.security.audit import write_audit
+from app.services.usage_service import Metric, meter
 
 
 class ClientService:
@@ -31,6 +32,13 @@ class ClientService:
             user_id=user_id,
             resource_type="client",
             resource_id=str(client.id),
+        )
+        await meter(
+            self.db,
+            organization_id=organization_id,
+            metric=Metric.CLIENT,
+            idempotency_key=f"client:{client.id}",
+            client_id=client.id,
         )
         return ClientOut.model_validate(client)
 

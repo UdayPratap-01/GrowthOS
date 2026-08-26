@@ -21,6 +21,7 @@ import {
   Rocket,
   Images,
   Wand2,
+  Clapperboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,7 @@ const nav = [
   { href: "/content-studio", label: "Content Studio", icon: Megaphone },
   { href: "/campaigns", label: "Campaigns", icon: Target },
   { href: "/campaign-builder", label: "Campaign Builder", icon: Wand2 },
+  { href: "/ai-campaigns", label: "AI Campaigns", icon: Clapperboard },
   { href: "/creative-library", label: "Creative Library", icon: Images },
   { href: "/leads", label: "Leads", icon: Users },
   { href: "/lead-scoring", label: "Lead Scoring", icon: Gauge },

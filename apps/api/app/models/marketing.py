@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -51,8 +51,41 @@ class Campaign(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     ad_account_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ad_accounts.id", ondelete="SET NULL"), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     platform: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Platform delivery state (active, paused, …) for campaigns that exist on a
+    #: platform. Deliberately separate from `review_status`: one describes what
+    #: an ad platform is doing, the other what a human has agreed to internally,
+    #: and collapsing them would lose the approval record the moment a campaign
+    #: went live.
     status: Mapped[str] = mapped_column(String(64), default="active")
+    #: Internal GrowthOS lifecycle:
+    #: DRAFT → GENERATING → READY_FOR_REVIEW → APPROVED → READY_TO_PUBLISH,
+    #: or → REJECTED. There is no PUBLISHED value: publishing is out of scope
+    #: for P2-A and would require a confirmed external campaign id.
+    review_status: Mapped[str] = mapped_column(String(32), default="DRAFT", index=True)
     objective: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    brief_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("campaign_briefs.id", ondelete="SET NULL"), nullable=True
+    )
+    audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    daily_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    monthly_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    generated_by_ai: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Set only when an integration confirms an external campaign. Nothing in
+    #: P2-A writes it; it exists so "published" can never be inferred from a
+    #: status string alone.
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejected_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     data_source: Mapped[DataSource] = mapped_column(Enum(DataSource, name="campaign_data_source", native_enum=False), default=DataSource.demo)
@@ -66,6 +99,10 @@ class AdSet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     campaign_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(64), default="active")
+    audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    daily_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    optimization: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    placements: Mapped[list] = mapped_column(JSON, default=list)
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -78,6 +115,19 @@ class Ad(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     ad_set_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("ad_sets.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(64), default="active")
+    concept_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("creative_concepts.id", ondelete="SET NULL"), nullable=True
+    )
+    variation_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("creative_variations.id", ondelete="SET NULL"), nullable=True
+    )
+    creative_asset_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("creative_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    headline: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    primary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cta: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    destination: Mapped[str | None] = mapped_column(String(512), nullable=True)
     creative: Mapped[dict] = mapped_column(JSON, default=dict)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
 

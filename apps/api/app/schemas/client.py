@@ -53,7 +53,19 @@ class ClientOut(ClientBase):
 
 
 class ClientContext(BaseModel):
-    """Structured client context supplied to AI agents."""
+    """
+    Structured client context supplied to AI agents.
+
+    `available_metrics` holds only figures that were actually recorded;
+    `insufficient_data_fields` names what is missing. Together they are the
+    contract that lets a prompt say "use these numbers and no others".
+
+    The history fields below are populated only by the campaign engine's richer
+    builder (`app.campaigns.context`). Other callers leave them empty rather than
+    paying to assemble history that a lead-scoring or content prompt would not
+    use — and an empty list here means "not loaded or not present", never
+    "performed poorly".
+    """
 
     client_id: UUID
     organization_id: UUID
@@ -73,3 +85,7 @@ class ClientContext(BaseModel):
     demo_mode: bool
     available_metrics: dict
     insufficient_data_fields: list[str] = Field(default_factory=list)
+    historical_campaign_performance: list[dict] = Field(default_factory=list)
+    historical_content_performance: list[dict] = Field(default_factory=list)
+    lead_performance: dict = Field(default_factory=dict)
+    previous_strategies: list[dict] = Field(default_factory=list)

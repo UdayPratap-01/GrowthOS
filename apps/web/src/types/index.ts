@@ -1,3 +1,5 @@
+export * from "./campaign-generation";
+
 export type User = {
   id: string;
   email: string;
@@ -157,7 +159,12 @@ export type Lead = {
   lead_score: number | null;
   score_explanation: {
     score?: number;
+    /** How the score was produced. "deterministic_rules" means no AI model was used. */
+    method?: string;
+    method_label?: string;
     reasons?: string[];
+    evidence?: string[];
+    data_limitations?: string[];
     based_on_available_data_only?: boolean;
     insufficient_data_note?: string | null;
   };
@@ -169,7 +176,14 @@ export type Lead = {
 
 export type IntegrationStatus = {
   provider: string;
-  status: "connected" | "not_connected" | "demo_data" | "sync_error";
+  /**
+   * Lifecycle:
+   *   not_connected → connecting → connected
+   *                 ↘ sync_error
+   *   connected → disconnected
+   *   demo_data is development-only simulated connectivity.
+   */
+  status: "not_connected" | "connecting" | "connected" | "sync_error" | "disconnected" | "demo_data";
   message: string;
   last_synced_at: string | null;
   account_label?: string | null;
@@ -392,15 +406,29 @@ export type CreativeAsset = {
   id: string;
   client_id: string;
   campaign_id: string | null;
+  /** Set for assets the campaign engine generated, so the library can be filtered by idea. */
+  concept_id?: string | null;
+  variation_id?: string | null;
   name: string;
   asset_type: string;
   platform: string | null;
   prompt: string | null;
   provider: string | null;
+  model?: string | null;
   status: string;
   content: Record<string, unknown>;
   meta: Record<string, unknown>;
   data_source: string;
+  mime_type?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration_seconds?: number | null;
+  aspect_ratio?: string | null;
+  storage_key?: string | null;
+  url?: string | null;
+  /** True only when a real provider produced the file. False means demo output. */
+  is_real?: boolean;
+  archived_at?: string | null;
   created_at: string;
 };
 

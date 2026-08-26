@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.orchestrator import get_orchestrator
 from app.core.deps import AuthContext, get_current_auth
+from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.security.limits import ai_limit
+from app.security.quota import requires_quota
+from app.services.usage_service import Metric
 from app.models.ai_ops import AIConversation
 from app.schemas.autopilot import AssistantCommandResult
 from app.services.client_service import ClientService
@@ -26,11 +30,15 @@ class ChatResponse(BaseModel):
     actions: list = Field(default_factory=list)
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(ai_limit), Depends(requires_quota(Metric.AI_REQUEST))],
+)
 async def chat(
     client_id: UUID,
     data: ChatRequest,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(require_permission(Permission.content_write)),
     db: AsyncSession = Depends(get_db),
 ) -> ChatResponse:
     if data.structured:

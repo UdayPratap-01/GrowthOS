@@ -21,6 +21,10 @@ class Lead(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source: Mapped[str | None] = mapped_column(String(120), nullable=True)
     campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ad: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Provider-side identifier (e.g. Meta leadgen_id). Deduplicates re-delivered leads.
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Platform attribution captured at ingest: platform, page_id, form_id, ad_id, campaign_id.
+    source_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     lead_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score_explanation: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[LeadStatus] = mapped_column(Enum(LeadStatus, name="lead_status", native_enum=False), default=LeadStatus.new, index=True)

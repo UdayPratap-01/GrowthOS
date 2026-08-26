@@ -43,38 +43,71 @@ class LeadAgent(BaseAgent[LeadScoreRequest, LeadScoreExplanation]):
         ]
 
     def deterministic_score(self, request: LeadScoreRequest) -> LeadScoreExplanation:
-        """Rule-based fallback that never invents behavioral events."""
+        """
+        Transparent rule-based score over CRM fields that are actually present.
+
+        This is not an LLM call and must never be presented as one. It scores
+        only recorded fields and explicitly declares behavioural signals the
+        product does not collect (page visits, email opens, form behaviour)
+        as limitations rather than inventing them.
+        """
         score = 35
-        reasons: list[str] = []
+        reasons: list[str] = ["Base score for a recorded lead: 35"]
+        evidence: list[str] = []
+
         if request.email:
             score += 15
-            reasons.append("Valid email present")
+            reasons.append("Valid email present (+15)")
+            evidence.append(f"email={request.email}")
         if request.phone:
             score += 10
-            reasons.append("Phone number present")
+            reasons.append("Phone number present (+10)")
+            evidence.append(f"phone={request.phone}")
         if request.source:
             score += 10
-            reasons.append(f"Source attributed: {request.source}")
+            reasons.append(f"Source attributed: {request.source} (+10)")
+            evidence.append(f"source={request.source}")
         if request.campaign:
             score += 12
-            reasons.append(f"Campaign attributed: {request.campaign}")
+            reasons.append(f"Campaign attributed: {request.campaign} (+12)")
+            evidence.append(f"campaign={request.campaign}")
         if request.ad:
             score += 8
-            reasons.append(f"Ad attributed: {request.ad}")
+            reasons.append(f"Ad attributed: {request.ad} (+8)")
+            evidence.append(f"ad={request.ad}")
         if request.notes:
             score += 5
-            reasons.append("Notes provide additional context")
+            reasons.append("Notes provide additional context (+5)")
+            evidence.append("notes=present")
         for activity in request.known_activities:
             score += 5
-            reasons.append(f"Observed activity: {activity}")
+            reasons.append(f"Recorded activity: {activity} (+5)")
+            evidence.append(f"activity={activity}")
+
         score = min(score, 100)
-        if not reasons:
-            reasons.append("Insufficient data for detailed scoring signals")
+
+        data_limitations: list[str] = []
+        if not request.email:
+            data_limitations.append("No email on record. Insufficient data.")
+        if not request.phone:
+            data_limitations.append("No phone number on record. Insufficient data.")
+        if not (request.source or request.campaign or request.ad):
+            data_limitations.append("No campaign or ad attribution on record. Insufficient data.")
+        if not request.known_activities:
+            data_limitations.append(
+                "No recorded lead activities. Website visits, pricing-page views, email opens and "
+                "form behaviour are not tracked by this system and were not used. Insufficient data."
+            )
+        if not evidence:
+            reasons.append("No scoring signals available beyond the base score.")
+
         return LeadScoreExplanation(
             score=score,
+            method="deterministic_rules",
+            method_label="Deterministic rule-based scoring",
             reasons=reasons,
+            evidence=evidence or ["Insufficient data."],
+            data_limitations=data_limitations,
             based_on_available_data_only=True,
-            insufficient_data_note="Score is based only on available CRM fields. Behavioral events unavailable."
-            if not request.known_activities
-            else None,
+            insufficient_data_note=" ".join(data_limitations) or None,
         )

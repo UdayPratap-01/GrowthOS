@@ -141,7 +141,31 @@ async def _ensure_phase2_enrichment(db, org: Organization, clients: list[Client]
             )
 
 
+class SeedBlockedError(RuntimeError):
+    """Raised when demo seeding is attempted in an environment that forbids it."""
+
+
+def assert_seeding_allowed() -> None:
+    """
+    Demo seeding writes fake organizations, clients, leads and analytics.
+    It must never run against a production database.
+    """
+    settings = get_settings()
+    if settings.is_production:
+        raise SeedBlockedError(
+            "DEMO SEEDING BLOCKED: ENVIRONMENT=production. "
+            "Demo data must never be written to a production database. "
+            "Run the seeder only with ENVIRONMENT=development or staging."
+        )
+    if not settings.allow_demo_seed:
+        raise SeedBlockedError(
+            "DEMO SEEDING BLOCKED: ALLOW_DEMO_SEED=false. "
+            "Set ALLOW_DEMO_SEED=true in a development or staging environment to seed demo data."
+        )
+
+
 async def seed() -> None:
+    assert_seeding_allowed()
     settings = get_settings()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -401,4 +425,10 @@ async def _ensure_phase5_enrichment(db, org: Organization) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(seed())
+    import sys
+
+    try:
+        asyncio.run(seed())
+    except SeedBlockedError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc

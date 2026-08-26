@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Select } from "@/components/ui/Select";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { api } from "@/lib/api";
+import { normalizeActionLifecycle } from "@/lib/jobs";
 import { AIAction, Client } from "@/types";
 
 export default function AIActivityPage() {
@@ -127,9 +128,22 @@ export default function AIActivityPage() {
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone={a.status === "FAILED" ? "danger" : a.status === "COMPLETED" ? "success" : "accent"}>
-                      {a.status}
+                    <Badge
+                      tone={
+                        normalizeActionLifecycle(a.status) === "failed"
+                          ? "danger"
+                          : normalizeActionLifecycle(a.status) === "published"
+                            ? "success"
+                            : normalizeActionLifecycle(a.status) === "executing"
+                              ? "accent"
+                              : normalizeActionLifecycle(a.status) === "pending_approval"
+                                ? "warning"
+                                : "default"
+                      }
+                    >
+                      {normalizeActionLifecycle(a.status).replaceAll("_", " ")}
                     </Badge>
+                    <Badge tone="default">{a.status}</Badge>
                     {a.demo_mode ? <Badge tone="demo">Demo</Badge> : null}
                     {a.status === "FAILED" ? (
                       <Button size="sm" variant="secondary" disabled={busy === a.id} onClick={() => retry(a.id)}>
