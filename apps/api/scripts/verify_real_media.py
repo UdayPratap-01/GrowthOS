@@ -48,11 +48,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("DEMO_MODE", "true")
-os.environ.setdefault("STORAGE_BACKEND", "local")
-os.environ.setdefault("STORAGE_LOCAL_PATH", "./storage_verify_real_media")
-# Forced off so media runs through the queue and the worker, as in production.
-os.environ.setdefault("INLINE_JOB_EXECUTION", "false")
+# Defaults only when this file is the entrypoint. Importing the helpers from
+# tests must not mutate the process environment (e.g. INLINE_JOB_EXECUTION).
+if __name__ == "__main__":
+    os.environ.setdefault("DEMO_MODE", "true")
+    os.environ.setdefault("STORAGE_BACKEND", "local")
+    os.environ.setdefault("STORAGE_LOCAL_PATH", "./storage_verify_real_media")
+    # Forced off so media runs through the queue and the worker, as in production.
+    os.environ.setdefault("INLINE_JOB_EXECUTION", "false")
 
 import httpx  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -364,6 +367,49 @@ def reload_settings(**env: str) -> None:
     get_settings.cache_clear()
 
 
+# Env keys that media verification phases may mutate. Phase 3 VENDOR mode must
+# see the process environment supplied at invocation, so every stand-in /
+# resolution phase snapshots and restores these — including on failure.
+MEDIA_ENV_KEYS = (
+    "DEMO_MODE",
+    "IMAGE_PROVIDER",
+    "IMAGE_API_KEY",
+    "IMAGE_MODEL",
+    "OPENAI_API_KEY",
+    "VIDEO_PROVIDER",
+    "VIDEO_API_KEY",
+    "VIDEO_MODEL",
+)
+
+
+@contextmanager
+def preserved_environ(*keys: str):
+    """
+    Snapshot the named process-env keys and restore them on exit.
+
+    Always clears the settings cache afterward so later phases read the
+    restored environment rather than a stale cached Settings object.
+    """
+    saved = {key: os.environ.get(key) for key in keys}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        get_settings.cache_clear()
+
+
+@contextmanager
+def temporary_settings(**env: str):
+    """Apply env overrides for the duration of the block, then restore them."""
+    with preserved_environ(*env.keys()):
+        reload_settings(**env)
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 — provider resolution. No credentials required.
 # ---------------------------------------------------------------------------
@@ -371,10 +417,7 @@ def reload_settings(**env: str) -> None:
 
 def phase_provider_resolution(report: Report) -> None:
     print("\n1. Provider resolution — production must never fall back to demo")
-    saved = {k: os.environ.get(k) for k in ("IMAGE_PROVIDER", "VIDEO_PROVIDER", "DEMO_MODE",
-                                            "IMAGE_API_KEY", "OPENAI_API_KEY", "VIDEO_API_KEY",
-                                            "VIDEO_MODEL")}
-    try:
+    with preserved_environ(*MEDIA_ENV_KEYS):
         reload_settings(IMAGE_PROVIDER="openai", IMAGE_API_KEY="", OPENAI_API_KEY="")
         provider = image_factory.get_image_provider()
         report.check(
@@ -413,13 +456,6 @@ def phase_provider_resolution(report: Report) -> None:
             vprovider.name != "demo",
             f"VIDEO_PROVIDER=demo outside demo mode does NOT yield the demo provider (got {vprovider.name})",
         )
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -429,53 +465,55 @@ def phase_provider_resolution(report: Report) -> None:
 
 async def phase_request_shape(report: Report) -> None:
     print("\n2. Outbound request shape — the adapters address the real vendors")
-    vendor = StandInVendor()
-    recorder = RecordingTransport(httpx.MockTransport(vendor.handler))
+    # Stand-in keys/models must not leak into Phase 3 VENDOR execution.
+    with preserved_environ(*MEDIA_ENV_KEYS):
+        vendor = StandInVendor()
+        recorder = RecordingTransport(httpx.MockTransport(vendor.handler))
 
-    reload_settings(IMAGE_PROVIDER="openai", IMAGE_API_KEY=STANDIN_KEY)
-    with vendor_transport(recorder):
-        result = await openai_image.OpenAIImageProvider().generate_image(
-            prompt="A verification probe for the image adapter", meta={"aspect_ratio": "1:1"}
-        )
-    image_calls = recorder.to("api.openai.com")
-    report.check(bool(image_calls), "the image adapter issued an outbound HTTP request")
-    if image_calls:
-        report.check(
-            image_calls[0].url == OPENAI_IMAGES_URL,
-            f"it addressed the real OpenAI Images endpoint ({image_calls[0].url})",
-        )
-        report.check(
-            image_calls[0].auth_scheme == "Bearer",
-            f"it authenticated with a Bearer credential (scheme={image_calls[0].auth_scheme})",
-        )
-    report.check(result.success and result.media_bytes is not None, "the adapter returned bytes")
-    report.check(result.demo is False, "bytes from the real adapter are not labelled demo")
+        reload_settings(IMAGE_PROVIDER="openai", IMAGE_API_KEY=STANDIN_KEY)
+        with vendor_transport(recorder):
+            result = await openai_image.OpenAIImageProvider().generate_image(
+                prompt="A verification probe for the image adapter", meta={"aspect_ratio": "1:1"}
+            )
+        image_calls = recorder.to("api.openai.com")
+        report.check(bool(image_calls), "the image adapter issued an outbound HTTP request")
+        if image_calls:
+            report.check(
+                image_calls[0].url == OPENAI_IMAGES_URL,
+                f"it addressed the real OpenAI Images endpoint ({image_calls[0].url})",
+            )
+            report.check(
+                image_calls[0].auth_scheme == "Bearer",
+                f"it authenticated with a Bearer credential (scheme={image_calls[0].auth_scheme})",
+            )
+        report.check(result.success and result.media_bytes is not None, "the adapter returned bytes")
+        report.check(result.demo is False, "bytes from the real adapter are not labelled demo")
 
-    reload_settings(VIDEO_PROVIDER="replicate", VIDEO_API_KEY=STANDIN_KEY, VIDEO_MODEL="owner/model")
-    recorder.calls.clear()
-    with vendor_transport(recorder):
-        submitted = await replicate_video.ReplicateVideoProvider().generate_video(
-            prompt="A verification probe for the video adapter", duration_seconds=5
-        )
-    video_calls = recorder.to("api.replicate.com")
-    report.check(bool(video_calls), "the video adapter issued an outbound HTTP request")
-    if video_calls:
+        reload_settings(VIDEO_PROVIDER="replicate", VIDEO_API_KEY=STANDIN_KEY, VIDEO_MODEL="owner/model")
+        recorder.calls.clear()
+        with vendor_transport(recorder):
+            submitted = await replicate_video.ReplicateVideoProvider().generate_video(
+                prompt="A verification probe for the video adapter", duration_seconds=5
+            )
+        video_calls = recorder.to("api.replicate.com")
+        report.check(bool(video_calls), "the video adapter issued an outbound HTTP request")
+        if video_calls:
+            report.check(
+                "api.replicate.com/v1/models/owner/model/predictions" in video_calls[0].url,
+                f"it addressed the real Replicate predictions endpoint ({video_calls[0].url})",
+            )
+            report.check(
+                video_calls[0].auth_scheme == "Token",
+                f"it authenticated with a Token credential (scheme={video_calls[0].auth_scheme})",
+            )
         report.check(
-            "api.replicate.com/v1/models/owner/model/predictions" in video_calls[0].url,
-            f"it addressed the real Replicate predictions endpoint ({video_calls[0].url})",
+            bool(submitted.external_id) and submitted.status == "processing",
+            f"submission returns a provider job id and a non-terminal status (got {submitted.status})",
         )
         report.check(
-            video_calls[0].auth_scheme == "Token",
-            f"it authenticated with a Token credential (scheme={video_calls[0].auth_scheme})",
+            submitted.media_bytes is None,
+            "submission alone yields no bytes — nothing is fabricated before the job finishes",
         )
-    report.check(
-        bool(submitted.external_id) and submitted.status == "processing",
-        f"submission returns a provider job id and a non-terminal status (got {submitted.status})",
-    )
-    report.check(
-        submitted.media_bytes is None,
-        "submission alone yields no bytes — nothing is fabricated before the job finishes",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -641,134 +679,137 @@ async def find_library_row(http: AsyncClient, headers: dict, asset_id: str) -> d
 
 async def phase_cancellation(report: Report, *, mode: str) -> None:
     print(f"\n4. Video cancellation — the provider must actually be told  [{mode}]")
-    vendor = StandInVendor()
-    # Never completes on its own, so there is always a live job to cancel.
-    vendor.polls_before_success = 10_000
-    recorder = RecordingTransport(httpx.MockTransport(vendor.handler))
-    reload_settings(
-        DEMO_MODE="false", VIDEO_PROVIDER="replicate", VIDEO_API_KEY=STANDIN_KEY, VIDEO_MODEL="owner/model"
-    )
+    with temporary_settings(
+        DEMO_MODE="false",
+        VIDEO_PROVIDER="replicate",
+        VIDEO_API_KEY=STANDIN_KEY,
+        VIDEO_MODEL="owner/model",
+    ):
+        vendor = StandInVendor()
+        # Never completes on its own, so there is always a live job to cancel.
+        vendor.polls_before_success = 10_000
+        recorder = RecordingTransport(httpx.MockTransport(vendor.handler))
 
-    owner_email, client_id = await make_tenant("cancel", demo_mode=False)
-    other_email, _ = await make_tenant("cancel-other", demo_mode=False)
+        owner_email, client_id = await make_tenant("cancel", demo_mode=False)
+        other_email, _ = await make_tenant("cancel-other", demo_mode=False)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
-        owner = await login(http, owner_email)
-        other = await login(http, other_email)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
+            owner = await login(http, owner_email)
+            other = await login(http, other_email)
 
-        with vendor_transport(recorder):
+            with vendor_transport(recorder):
 
-            async def submit_job() -> str | None:
-                """Submit and let the worker reach the provider, so a real job id exists."""
-                resp = await http.post(
-                    "/api/v1/creative/videos/generate",
-                    headers=owner,
-                    json={
-                        "client_id": str(client_id),
-                        "prompt": "A cancellation probe for the video adapter",
-                        "aspect_ratio": "9:16",
-                        "duration_seconds": 5,
-                    },
-                )
-                if resp.status_code >= 400:
-                    report.check(False, f"a video job could be created ({resp.status_code}: {resp.text[:200]})")
-                    return None
-                # follow_scheduled off: advancing the clock would poll this job
-                # forward, and the point is to cancel one that is still running.
-                await drain_queue(max_cycles=4, follow_scheduled=False)
-                return resp.json().get("job_id")
+                async def submit_job() -> str | None:
+                    """Submit and let the worker reach the provider, so a real job id exists."""
+                    resp = await http.post(
+                        "/api/v1/creative/videos/generate",
+                        headers=owner,
+                        json={
+                            "client_id": str(client_id),
+                            "prompt": "A cancellation probe for the video adapter",
+                            "aspect_ratio": "9:16",
+                            "duration_seconds": 5,
+                        },
+                    )
+                    if resp.status_code >= 400:
+                        report.check(False, f"a video job could be created ({resp.status_code}: {resp.text[:200]})")
+                        return None
+                    # follow_scheduled off: advancing the clock would poll this job
+                    # forward, and the point is to cancel one that is still running.
+                    await drain_queue(max_cycles=4, follow_scheduled=False)
+                    return resp.json().get("job_id")
 
-            job_id = await submit_job()
-            if not job_id:
-                return
-            report.check(True, "a video job exists to cancel")
+                job_id = await submit_job()
+                if not job_id:
+                    return
+                report.check(True, "a video job exists to cancel")
 
-            state = (await http.get(f"/api/v1/creative/videos/jobs/{job_id}", headers=owner)).json()
-            report.check(
-                state["status"] in {"QUEUED", "SUBMITTED", "GENERATING", "PROCESSING"},
-                f"the job is live before cancelling (status={state['status']})",
-            )
-            report.check(
-                bool(state.get("provider_job_id")),
-                "the job carries a provider job id, so there is something to cancel remotely",
-            )
-
-            # --- cross-tenant cancellation --------------------------------
-            foreign = await http.post(
-                f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=other, json={}
-            )
-            report.check(
-                foreign.status_code in {404, 400},
-                f"another organization cannot cancel the job (got {foreign.status_code})",
-            )
-            still = (await http.get(f"/api/v1/creative/videos/jobs/{job_id}", headers=owner)).json()
-            report.check(still["status"] != "CANCELLED", "the foreign attempt did not change the job")
-
-            # --- provider accepts the cancellation ------------------------
-            before = len(vendor.cancelled)
-            cancelled = await http.post(
-                f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=owner, json={}
-            )
-            report.check(cancelled.status_code == 200, f"the owner can cancel ({cancelled.status_code})")
-            report.check(
-                len(vendor.cancelled) == before + 1,
-                "the provider's cancel endpoint was actually called, not just the database",
-            )
-            report.check(
-                any(c.url.endswith("/cancel") for c in recorder.calls),
-                "an outbound cancel request was recorded",
-            )
-            report.check(
-                cancelled.json()["status"] == "CANCELLED",
-                f"the job is CANCELLED locally once the provider agreed (got {cancelled.json()['status']})",
-            )
-
-            # --- cancelling a finished job --------------------------------
-            repeat = await http.post(
-                f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=owner, json={}
-            )
-            body = repeat.json()
-            report.check(
-                "already finished" in (body.get("message") or "").lower(),
-                f"a finished job reports there was nothing to cancel ({body.get('message')!r})",
-            )
-            report.check(
-                len(vendor.cancelled) == before + 1,
-                "no second provider cancellation was issued for an already-finished job",
-            )
-
-            # --- provider refuses the cancellation ------------------------
-            vendor.cancel_status = 409
-            job2_id = await submit_job()
-            if job2_id:
-                before_status = (
-                    await http.get(f"/api/v1/creative/videos/jobs/{job2_id}", headers=owner)
-                ).json()["status"]
-                refused = await http.post(
-                    f"/api/v1/creative/videos/jobs/{job2_id}/cancel", headers=owner, json={}
-                )
-                after = (await http.get(f"/api/v1/creative/videos/jobs/{job2_id}", headers=owner)).json()
+                state = (await http.get(f"/api/v1/creative/videos/jobs/{job_id}", headers=owner)).json()
                 report.check(
-                    any(c.url.endswith("/cancel") and c.status == 409 for c in recorder.calls),
-                    "the provider was asked and refused (HTTP 409 recorded)",
+                    state["status"] in {"QUEUED", "SUBMITTED", "GENERATING", "PROCESSING"},
+                    f"the job is live before cancelling (status={state['status']})",
                 )
                 report.check(
-                    refused.status_code == 502
-                    and refused.json()["error"]["code"] == "MEDIA_CANCELLATION_FAILED",
-                    f"a refusal returns the structured cancellation error ({refused.status_code})",
+                    bool(state.get("provider_job_id")),
+                    "the job carries a provider job id, so there is something to cancel remotely",
+                )
+
+                # --- cross-tenant cancellation --------------------------------
+                foreign = await http.post(
+                    f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=other, json={}
                 )
                 report.check(
-                    after["status"] != "CANCELLED",
-                    f"a refused cancellation is NOT recorded as CANCELLED (status={after['status']})",
+                    foreign.status_code in {404, 400},
+                    f"another organization cannot cancel the job (got {foreign.status_code})",
+                )
+                still = (await http.get(f"/api/v1/creative/videos/jobs/{job_id}", headers=owner)).json()
+                report.check(still["status"] != "CANCELLED", "the foreign attempt did not change the job")
+
+                # --- provider accepts the cancellation ------------------------
+                before = len(vendor.cancelled)
+                cancelled = await http.post(
+                    f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=owner, json={}
+                )
+                report.check(cancelled.status_code == 200, f"the owner can cancel ({cancelled.status_code})")
+                report.check(
+                    len(vendor.cancelled) == before + 1,
+                    "the provider's cancel endpoint was actually called, not just the database",
                 )
                 report.check(
-                    after["status"] == before_status,
-                    f"the job keeps its real state ({before_status} -> {after['status']})",
+                    any(c.url.endswith("/cancel") for c in recorder.calls),
+                    "an outbound cancel request was recorded",
                 )
                 report.check(
-                    "cannot cancel" not in refused.text,
-                    "the provider's raw refusal body is not echoed to the caller",
+                    cancelled.json()["status"] == "CANCELLED",
+                    f"the job is CANCELLED locally once the provider agreed (got {cancelled.json()['status']})",
                 )
+
+                # --- cancelling a finished job --------------------------------
+                repeat = await http.post(
+                    f"/api/v1/creative/videos/jobs/{job_id}/cancel", headers=owner, json={}
+                )
+                body = repeat.json()
+                report.check(
+                    "already finished" in (body.get("message") or "").lower(),
+                    f"a finished job reports there was nothing to cancel ({body.get('message')!r})",
+                )
+                report.check(
+                    len(vendor.cancelled) == before + 1,
+                    "no second provider cancellation was issued for an already-finished job",
+                )
+
+                # --- provider refuses the cancellation ------------------------
+                vendor.cancel_status = 409
+                job2_id = await submit_job()
+                if job2_id:
+                    before_status = (
+                        await http.get(f"/api/v1/creative/videos/jobs/{job2_id}", headers=owner)
+                    ).json()["status"]
+                    refused = await http.post(
+                        f"/api/v1/creative/videos/jobs/{job2_id}/cancel", headers=owner, json={}
+                    )
+                    after = (await http.get(f"/api/v1/creative/videos/jobs/{job2_id}", headers=owner)).json()
+                    report.check(
+                        any(c.url.endswith("/cancel") and c.status == 409 for c in recorder.calls),
+                        "the provider was asked and refused (HTTP 409 recorded)",
+                    )
+                    report.check(
+                        refused.status_code == 502
+                        and refused.json()["error"]["code"] == "MEDIA_CANCELLATION_FAILED",
+                        f"a refusal returns the structured cancellation error ({refused.status_code})",
+                    )
+                    report.check(
+                        after["status"] != "CANCELLED",
+                        f"a refused cancellation is NOT recorded as CANCELLED (status={after['status']})",
+                    )
+                    report.check(
+                        after["status"] == before_status,
+                        f"the job keeps its real state ({before_status} -> {after['status']})",
+                    )
+                    report.check(
+                        "cannot cancel" not in refused.text,
+                        "the provider's raw refusal body is not echoed to the caller",
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -778,44 +819,51 @@ async def phase_cancellation(report: Report, *, mode: str) -> None:
 
 async def phase_demo_and_unconfigured(report: Report) -> None:
     print("\n5. DEMO and NOT_CONFIGURED classification")
-    owner_email, client_id = await make_tenant("modes", demo_mode=True)
+    with preserved_environ(*MEDIA_ENV_KEYS):
+        owner_email, client_id = await make_tenant("modes", demo_mode=True)
 
-    reload_settings(IMAGE_PROVIDER="demo", DEMO_MODE="true", IMAGE_API_KEY="")
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
-        owner = await login(http, owner_email)
-        created = await http.post(
-            "/api/v1/creative/images/generate",
-            headers=owner,
-            json={"client_id": str(client_id), "prompt": "A demo-mode classification probe", "quantity": 1},
-        )
-        report.check(created.status_code < 400, f"demo generation is accepted ({created.status_code})")
-        await drain_queue(max_cycles=8)
-        rows = (await http.get("/api/v1/creative/assets?limit=50", headers=owner)).json()
-        demo_rows = [r for r in rows if r["data_source"] == "demo"]
-        report.check(bool(demo_rows), "the demo provider produced an asset")
-        if demo_rows:
-            report.check(demo_rows[0]["is_real"] is False, "a demo asset reports is_real false")
-            body = await http.get(f"/api/v1/creative/media/{demo_rows[0]['id']}", headers=owner)
-            report.check(
-                body.status_code == 200 and body.content.startswith(b"\x89PNG"),
-                "the demo asset is a real file on disk, honestly labelled",
+        reload_settings(IMAGE_PROVIDER="demo", DEMO_MODE="true", IMAGE_API_KEY="")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
+            owner = await login(http, owner_email)
+            created = await http.post(
+                "/api/v1/creative/images/generate",
+                headers=owner,
+                json={"client_id": str(client_id), "prompt": "A demo-mode classification probe", "quantity": 1},
             )
+            report.check(created.status_code < 400, f"demo generation is accepted ({created.status_code})")
+            await drain_queue(max_cycles=8)
+            rows = (await http.get("/api/v1/creative/assets?limit=50", headers=owner)).json()
+            demo_rows = [r for r in rows if r["data_source"] == "demo"]
+            report.check(bool(demo_rows), "the demo provider produced an asset")
+            if demo_rows:
+                report.check(demo_rows[0]["is_real"] is False, "a demo asset reports is_real false")
+                body = await http.get(f"/api/v1/creative/media/{demo_rows[0]['id']}", headers=owner)
+                report.check(
+                    body.status_code == 200 and body.content.startswith(b"\x89PNG"),
+                    "the demo asset is a real file on disk, honestly labelled",
+                )
 
-    reload_settings(IMAGE_PROVIDER="none", VIDEO_PROVIDER="none")
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
-        owner = await login(http, owner_email)
-        before = len((await http.get("/api/v1/creative/assets?limit=200", headers=owner)).json())
-        resp = await http.post(
-            "/api/v1/creative/images/generate",
-            headers=owner,
-            json={"client_id": str(client_id), "prompt": "An unconfigured-provider probe", "quantity": 1},
-        )
-        payload = resp.json() if resp.status_code < 500 else {}
-        text = (str(payload) + resp.text).upper()
-        report.check("NOT_CONFIGURED" in text, f"an unconfigured provider reports NOT_CONFIGURED ({resp.status_code})")
-        report.check("HTTP" not in str(payload.get("url") or ""), "no URL was offered for an asset that does not exist")
-        after = len((await http.get("/api/v1/creative/assets?limit=200", headers=owner)).json())
-        report.check(after == before, f"no asset row was invented ({before} -> {after})")
+        reload_settings(IMAGE_PROVIDER="none", VIDEO_PROVIDER="none")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as http:
+            owner = await login(http, owner_email)
+            before = len((await http.get("/api/v1/creative/assets?limit=200", headers=owner)).json())
+            resp = await http.post(
+                "/api/v1/creative/images/generate",
+                headers=owner,
+                json={"client_id": str(client_id), "prompt": "An unconfigured-provider probe", "quantity": 1},
+            )
+            payload = resp.json() if resp.status_code < 500 else {}
+            text = (str(payload) + resp.text).upper()
+            report.check(
+                "NOT_CONFIGURED" in text,
+                f"an unconfigured provider reports NOT_CONFIGURED ({resp.status_code})",
+            )
+            report.check(
+                "HTTP" not in str(payload.get("url") or ""),
+                "no URL was offered for an asset that does not exist",
+            )
+            after = len((await http.get("/api/v1/creative/assets?limit=200", headers=owner)).json())
+            report.check(after == before, f"no asset row was invented ({before} -> {after})")
 
 
 # ---------------------------------------------------------------------------
@@ -867,29 +915,33 @@ async def main() -> int:
     # provider says so *or* the workspace is in demo mode, so `live` can only be
     # verified in a workspace that is not pretending. That is also the only
     # configuration production runs in.
+    #
+    # VENDOR mode must keep the process IMAGE_*/VIDEO_* values from invocation
+    # (Phase 2 stand-in overrides are restored above). Only DEMO_MODE is forced.
     if image_mode == "VENDOR" or video_mode == "VENDOR":
         vendor = None
         inner: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport()
-        reload_settings(DEMO_MODE="false")
+        chain_env = {"DEMO_MODE": "false"}
     else:
         vendor = StandInVendor()
         inner = httpx.MockTransport(vendor.handler)
-        reload_settings(
-            DEMO_MODE="false",
-            IMAGE_PROVIDER="openai",
-            IMAGE_API_KEY=STANDIN_KEY,
-            VIDEO_PROVIDER="replicate",
-            VIDEO_API_KEY=STANDIN_KEY,
-            VIDEO_MODEL="owner/model",
+        chain_env = {
+            "DEMO_MODE": "false",
+            "IMAGE_PROVIDER": "openai",
+            "IMAGE_API_KEY": STANDIN_KEY,
+            "VIDEO_PROVIDER": "replicate",
+            "VIDEO_API_KEY": STANDIN_KEY,
+            "VIDEO_MODEL": "owner/model",
+        }
+    with temporary_settings(**chain_env):
+        recorder = RecordingTransport(inner)
+        await phase_media_chain(
+            report,
+            mode=f"image={image_mode} video={video_mode}",
+            recorder=recorder,
+            vendor=vendor,
+            want_video=True,
         )
-    recorder = RecordingTransport(inner)
-    await phase_media_chain(
-        report,
-        mode=f"image={image_mode} video={video_mode}",
-        recorder=recorder,
-        vendor=vendor,
-        want_video=True,
-    )
 
     await phase_cancellation(report, mode=video_mode)
     await phase_demo_and_unconfigured(report)
