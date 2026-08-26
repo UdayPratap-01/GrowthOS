@@ -1,8 +1,10 @@
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 # Force demo image provider for contract tests (real PNG file, labeled DEMO)
 os.environ["DEMO_MODE"] = "true"
@@ -15,9 +17,45 @@ from app.core.config import get_settings
 
 get_settings.cache_clear()
 
+from app.db.session import AsyncSessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.generation.media_utils import is_valid_image, make_demo_png  # noqa: E402
+from app.models.billing import SubscriptionStatus  # noqa: E402
+from app.models.organization import OrganizationMember  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.services.billing_service import BillingService  # noqa: E402
 from app.storage.object_storage import LocalObjectStorage  # noqa: E402
+
+
+async def _ensure_demo_org_subscription_usable() -> None:
+    """
+    The media contract logs in as the long-lived seeded demo user. Billing's
+    OrganizationSubscription for that org is created lazily with a 14-day trial
+    and then ages in the shared SQLite DB — after trial_ends_at, quota-gated
+    routes return 402. Refresh it here so this file does not depend on when the
+    demo org was first billed.
+    """
+    async with AsyncSessionLocal() as db:
+        user = await db.scalar(select(User).where(User.email == "demo@growthos.ai"))
+        assert user is not None, "demo user must be seeded before this suite"
+        membership = await db.scalar(
+            select(OrganizationMember).where(OrganizationMember.user_id == user.id)
+        )
+        assert membership is not None
+        service = BillingService(db)
+        subscription = await service.get_subscription(membership.organization_id)
+        subscription.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
+        if subscription.status not in {
+            SubscriptionStatus.TRIALING,
+            SubscriptionStatus.ACTIVE,
+            SubscriptionStatus.PAST_DUE,
+        }:
+            await service.set_status(
+                membership.organization_id,
+                SubscriptionStatus.ACTIVE,
+                reason="Test fixture: restore usable demo subscription.",
+            )
+        await db.commit()
 
 
 def test_demo_png_is_valid_image():
@@ -40,6 +78,7 @@ async def test_local_storage_roundtrip():
 
 @pytest.mark.asyncio
 async def test_image_generation_demo_produces_file_and_media_endpoint():
+    await _ensure_demo_org_subscription_usable()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", timeout=60.0) as client:
         login = await client.post("/api/v1/auth/login", json={"email": "demo@growthos.ai", "password": "demo1234"})

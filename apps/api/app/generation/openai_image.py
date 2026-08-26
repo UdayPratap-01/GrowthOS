@@ -8,7 +8,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.generation.base import GenerationResult, ImageGenerationProvider
-from app.generation.media_utils import is_valid_image, openai_image_size
+from app.generation.media_utils import is_gpt_image_model, is_valid_image, openai_image_size
 
 
 class OpenAIImageProvider(ImageGenerationProvider):
@@ -42,15 +42,19 @@ class OpenAIImageProvider(ImageGenerationProvider):
             )
 
         aspect = (meta or {}).get("aspect_ratio") or "1:1"
-        size = openai_image_size(str(aspect))
+        size = openai_image_size(str(aspect), self.model)
         # dall-e-3 supports size presets; map width/height if provided via size
         payload = {
             "model": self.model,
             "prompt": prompt[:3900],
             "n": 1,
             "size": size,
-            "response_format": "b64_json",
         }
+        if not is_gpt_image_model(self.model):
+            # DALL·E defaults to a short-lived URL, so base64 has to be asked
+            # for. The gpt-image family always returns base64 and rejects the
+            # parameter as unknown, failing the request outright.
+            payload["response_format"] = "b64_json"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
         try:

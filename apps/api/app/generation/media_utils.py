@@ -49,8 +49,25 @@ def parse_aspect_ratio(aspect: str, *, default: Tuple[int, int] = (1024, 1024)) 
     return mapping.get((aspect or "1:1").strip(), default)
 
 
-def openai_image_size(aspect: str) -> str:
+def is_gpt_image_model(model: str) -> bool:
+    """
+    True for the `gpt-image-*` family (including `chatgpt-image-latest`).
+
+    The two OpenAI image families share one endpoint but not one request shape,
+    so the caller has to know which it is talking to.
+    """
+    return "gpt-image" in (model or "").strip().lower()
+
+
+def openai_image_size(aspect: str, model: str = "") -> str:
     a = (aspect or "1:1").strip()
+    if is_gpt_image_model(model):
+        # This family accepts only these three; a DALL·E size is rejected.
+        if a == "16:9":
+            return "1536x1024"
+        if a == "9:16":
+            return "1024x1536"
+        return "1024x1024"
     if a == "16:9":
         return "1792x1024"
     if a == "9:16":
