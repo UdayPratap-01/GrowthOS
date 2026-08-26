@@ -8,7 +8,11 @@ import httpx
 
 from app.core.config import get_settings
 from app.generation.base import GenerationResult, ImageGenerationProvider
-from app.generation.media_utils import is_gpt_image_model, is_valid_image, openai_image_size
+from app.generation.media_utils import (
+    is_retired_openai_image_model,
+    is_valid_image,
+    openai_image_size,
+)
 
 
 class OpenAIImageProvider(ImageGenerationProvider):
@@ -17,7 +21,7 @@ class OpenAIImageProvider(ImageGenerationProvider):
     def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         settings = get_settings()
         self.api_key = (api_key or settings.image_api_key or settings.openai_api_key or "").strip()
-        self.model = (model or settings.image_model or "dall-e-3").strip()
+        self.model = (model or settings.image_model or "gpt-image-1").strip()
 
     def configured(self) -> bool:
         return bool(self.api_key)
@@ -41,20 +45,30 @@ class OpenAIImageProvider(ImageGenerationProvider):
                 retryable=False,
             )
 
+        if is_retired_openai_image_model(self.model):
+            return GenerationResult(
+                success=False,
+                status="failed",
+                provider=self.name,
+                message="This OpenAI image model has been retired; use a gpt-image model",
+                error=(
+                    f"OpenAI retired {self.model!r} on 2026-05-12. "
+                    "Set IMAGE_MODEL to gpt-image-1 (or another current gpt-image model)."
+                ),
+                error_code="MODEL_RETIRED",
+                retryable=False,
+            )
+
         aspect = (meta or {}).get("aspect_ratio") or "1:1"
         size = openai_image_size(str(aspect), self.model)
-        # dall-e-3 supports size presets; map width/height if provided via size
+        # Current Images API (gpt-image family): no response_format parameter.
+        # Models always return base64 in data[].b64_json.
         payload = {
             "model": self.model,
             "prompt": prompt[:3900],
             "n": 1,
             "size": size,
         }
-        if not is_gpt_image_model(self.model):
-            # DALL·E defaults to a short-lived URL, so base64 has to be asked
-            # for. The gpt-image family always returns base64 and rejects the
-            # parameter as unknown, failing the request outright.
-            payload["response_format"] = "b64_json"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
         try:
@@ -174,7 +188,7 @@ class OpenAIImageProvider(ImageGenerationProvider):
     async def generate_variations(
         self, *, prompt: str, count: int = 3, meta: dict | None = None
     ) -> GenerationResult:
-        # dall-e-3 does not support n>1; generate sequentially via caller
+        # OpenAI Images generate is n=1 for practical use; callers loop if needed.
         return await self.generate_image(prompt=prompt, meta=meta)
 
     async def get_status(self, job_id: str) -> GenerationResult:

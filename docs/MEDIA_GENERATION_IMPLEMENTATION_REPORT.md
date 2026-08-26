@@ -115,7 +115,7 @@ STORAGE_LOCAL_PATH=./storage
 DEMO_MODE=false
 IMAGE_PROVIDER=openai
 IMAGE_API_KEY=sk-...
-IMAGE_MODEL=dall-e-3
+IMAGE_MODEL=gpt-image-1
 
 # Live videos
 VIDEO_PROVIDER=replicate

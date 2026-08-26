@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     # Media generation — none | demo | openai (images); none | demo | replicate (videos)
     image_provider: str = "none"
     image_api_key: str = ""
-    image_model: str = "dall-e-3"
+    image_model: str = "gpt-image-1"
     video_provider: str = "none"
     video_api_key: str = ""
     video_model: str = ""  # replicate owner/name or version hash

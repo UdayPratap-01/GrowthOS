@@ -160,7 +160,7 @@ Media generation providers (real files required for COMPLETED):
 ```bash
 IMAGE_PROVIDER=none|demo|openai
 IMAGE_API_KEY=          # or reuse OPENAI_API_KEY when IMAGE_PROVIDER=openai
-IMAGE_MODEL=dall-e-3
+IMAGE_MODEL=gpt-image-1
 VIDEO_PROVIDER=none|demo|replicate
 VIDEO_API_KEY=
 VIDEO_MODEL=            # replicate owner/name or version

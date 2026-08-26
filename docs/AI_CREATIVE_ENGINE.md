@@ -626,7 +626,7 @@ cd apps/web && npm run dev
 AI_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 IMAGE_PROVIDER=openai
-IMAGE_MODEL=dall-e-3
+IMAGE_MODEL=gpt-image-1
 VIDEO_PROVIDER=replicate
 VIDEO_API_KEY=r8_...
 VIDEO_MODEL=owner/name        # or a version hash

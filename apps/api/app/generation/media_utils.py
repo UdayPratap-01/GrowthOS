@@ -53,10 +53,15 @@ def is_gpt_image_model(model: str) -> bool:
     """
     True for the `gpt-image-*` family (including `chatgpt-image-latest`).
 
-    The two OpenAI image families share one endpoint but not one request shape,
-    so the caller has to know which it is talking to.
+    OpenAI's current Images API is this family; DALL·E snapshots are retired.
     """
     return "gpt-image" in (model or "").strip().lower()
+
+
+def is_retired_openai_image_model(model: str) -> bool:
+    """True for DALL·E snapshots shut down on the Images API (2026-05-12)."""
+    slug = (model or "").strip().lower().replace("_", "-")
+    return slug in {"dall-e-2", "dall-e-3", "dalle-2", "dalle-3"}
 
 
 # Lightricks LTX on Replicate accepts only these two ratios (vendor schema).
@@ -95,18 +100,19 @@ def replicate_video_aspect_ratio_error(aspect: str, model: str) -> str | None:
 
 
 def openai_image_size(aspect: str, model: str = "") -> str:
+    """
+    Map an aspect ratio to an OpenAI Images `size` string.
+
+    Current gpt-image models accept only these three presets. The `model`
+    argument is retained for callers; size selection no longer branches on
+    retired DALL·E presets (`1792x1024` / `1024x1792`).
+    """
+    _ = model
     a = (aspect or "1:1").strip()
-    if is_gpt_image_model(model):
-        # This family accepts only these three; a DALL·E size is rejected.
-        if a == "16:9":
-            return "1536x1024"
-        if a == "9:16":
-            return "1024x1536"
-        return "1024x1024"
     if a == "16:9":
-        return "1792x1024"
+        return "1536x1024"
     if a == "9:16":
-        return "1024x1792"
+        return "1024x1536"
     return "1024x1024"
 
 
