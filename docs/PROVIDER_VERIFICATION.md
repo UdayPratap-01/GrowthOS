@@ -73,6 +73,21 @@ Verify body:
 
 Helpers: `apps/api/app/integrations/meta_oauth.py`
 
+## Google OAuth prerequisites (M7)
+
+| Item | Detail |
+|------|--------|
+| Env | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN` |
+| Optional | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (MCC), `GOOGLE_ADS_REDIRECT_URI` |
+| Scope | `https://www.googleapis.com/auth/adwords` + `openid` + `email` |
+| Storage | Encrypted Fernet blob; refresh_token + access_token |
+| Token lifecycle | `ensure_access_token` refreshes when stale |
+| Discovery | `customers:listAccessibleCustomers` → `config.customers[]`, `config.customer_id` |
+| Supported mutations | pause / resume campaign status only |
+| Unsupported | Google campaign budget mutate (`campaignBudget`) |
+
+Helpers: `apps/api/app/integrations/google_ads_discovery.py`
+
 ## Manual verification (when credentials exist)
 
 1. Configure Meta or Google env vars (see `.env.example`) — reuse existing names.

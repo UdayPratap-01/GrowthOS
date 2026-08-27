@@ -359,9 +359,17 @@ See [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
 - Automated tests: `tests/test_meta_m6_verification.py` (mocked Graph; no live credentials)
 - Real Meta canary remains manual — see [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md)
 
+### Milestone 7 — Real Google verification
+
+- `app/integrations/google_ads_discovery.py` — customer discovery + connection config builder
+- OAuth callback persists `customers[]` / `customer_id`; sync stamps `metrics.customer_id`
+- `classify_google_ads_error`; pause/resume via `campaigns:mutate`; budget **UNSUPPORTED**
+- Automated tests: `tests/test_google_m7_verification.py` (mocked Ads API; no live credentials)
+- Real Google canary remains manual — see [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md)
+
 ### Database
 
-No new Milestone 3 migration. Reuses `performance_recommendations`, `ai_actions`, `action_executions`, `autonomy_settings`, and audit events. Decision snapshots live in recommendation JSON.
+No new Milestone 3–7 migration for provider verification. Reuses `performance_recommendations`, `ai_actions`, `action_executions`, `autonomy_settings`, `integrations`, and audit events. Decision snapshots live in recommendation JSON.
 
 ## Production safety & operator control (Milestone 4)
 

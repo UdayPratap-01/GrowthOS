@@ -25,6 +25,7 @@ from app.publishing.base import PublishResult
 from app.publishing.provider_errors import (
     PROVIDER_TIMEOUT_AMBIGUOUS,
     PROVIDER_TRANSPORT_AMBIGUOUS,
+    classify_google_ads_error,
     classify_meta_graph_error,
 )
 
@@ -431,7 +432,13 @@ class AdsExecutor:
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
 
-        customer_id = (campaign.metrics or {}).get("customer_id") or settings.google_ads_login_customer_id
+        from app.integrations.google_ads_discovery import resolve_google_customer_id
+
+        customer_id = resolve_google_customer_id(
+            campaign_metrics=campaign.metrics if campaign else None,
+            integration_config=row.config if row else None,
+            login_customer_id=settings.google_ads_login_customer_id,
+        )
         if not customer_id:
             return AdsExecutionResult(
                 success=False,
@@ -444,7 +451,11 @@ class AdsExecutor:
             )
 
         status_value = "PAUSED" if action.action_type == AIActionType.pause_campaign else "ENABLED"
-        resource_name = resource_id if resource_id.startswith("customers/") else f"customers/{customer_id}/campaigns/{resource_id}"
+        resource_name = (
+            resource_id
+            if resource_id.startswith("customers/")
+            else f"customers/{customer_id}/campaigns/{resource_id}"
+        )
         mutate_body = {
             "operations": [
                 {
@@ -464,7 +475,8 @@ class AdsExecutor:
         if settings.google_ads_login_customer_id:
             headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
 
-        url = f"https://googleads.googleapis.com/v18/customers/{str(customer_id).replace('-', '')}/googleAds:mutate"
+        # Google Ads REST: campaign status updates use customers/{id}/campaigns:mutate
+        url = f"https://googleads.googleapis.com/v18/customers/{customer_id}/campaigns:mutate"
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(url, headers=headers, json=mutate_body)
@@ -494,13 +506,22 @@ class AdsExecutor:
             )
 
         body = resp.json() if resp.content else {}
+        if isinstance(body, dict):
+            body = {k: v for k, v in body.items() if k not in {"access_token", "refresh_token", "developer-token"}}
         if resp.status_code >= 400:
+            error_code, _cat = classify_google_ads_error(
+                status_code=resp.status_code,
+                body=body if isinstance(body, dict) else {},
+                text=resp.text,
+            )
+            err = body.get("error") if isinstance(body, dict) else {}
+            err = err if isinstance(err, dict) else {}
             return AdsExecutionResult(
                 success=False,
                 status="failed",
-                message=body.get("error", {}).get("message") or resp.text[:300] or "Google Ads API error",
-                error="PLATFORM_API_ERROR",
-                error_code=f"HTTP_{resp.status_code}",
+                message=err.get("message") or resp.text[:300] or "Google Ads API error",
+                error=err.get("message") or error_code,
+                error_code=error_code,
                 platform_response={"status_code": resp.status_code, "body": body},
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
@@ -526,7 +547,7 @@ class AdsExecutor:
         return AdsExecutionResult(
             success=True,
             status="succeeded",
-            message="Google Ads confirmed the campaign status change",
+            message="Google Ads confirmed the campaign status change — post-action reconciliation still required",
             external_id=resource_id,
             platform_response=body,
             before_state=before,

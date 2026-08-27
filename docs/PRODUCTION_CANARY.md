@@ -160,6 +160,39 @@ Confirm phrases:
 
 **Canary success ≠ unrestricted production autonomy.**
 
+## Real Google canary checklist (M7)
+
+Use a **dedicated low-risk Google Ads customer** and a **single test campaign**. Stop on any failure.
+
+```text
+1. Google Cloud OAuth client + Google Ads API enabled
+2. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_ADS_DEVELOPER_TOKEN
+3. Optional GOOGLE_ADS_LOGIN_CUSTOMER_ID for MCC
+4. Integrations UI → Connect Google Ads → customers[] discovered
+5. Read-only verify → VERIFIED + canary_resources campaigns
+6. Sync/create GrowthOS Campaign with external_id + metrics.customer_id
+7. Allowlists:
+   CANARY_ENABLED=true
+   CANARY_ALLOWED_ORG_IDS=<org>
+   CANARY_ALLOWED_PROVIDERS=google_ads
+   CANARY_ALLOWED_GOOGLE_CUSTOMERS=<customer_id>
+   CANARY_ALLOWED_GOOGLE_CAMPAIGNS=<campaign_id>
+   CANARY_ALLOWED_ACTIONS=pause_campaign,resume_campaign
+   CANARY_ALLOWED_ENVIRONMENTS=<this env>
+8. Keep AUTONOMOUS_EXECUTION_ENABLED=false; AUTONOMOUS_KILL_SWITCH=false for canary
+9. Dry-run pause → ALLOWED
+10. Execute pause → post-verify PAUSED (Google status PAUSED)
+11. Dry-run resume → execute → post-verify ENABLED/ACTIVE
+12. Budget update: NOT supported in M7 (campaignBudget resource) — skip
+13. If UNKNOWN/timeout → reconcile only; never blind retry
+```
+
+**MOCKED GOOGLE VERIFICATION** = CI tests with HTTP mocks.  
+**REAL GOOGLE VERIFICATION** = this checklist with live credentials.  
+**PRODUCTION SIGN-OFF** = later autonomous spend approval (not M7).
+
+**Canary success ≠ unrestricted production autonomy.**
+
 ## Rollback
 
 1. Set `AUTONOMOUS_KILL_SWITCH=true` and/or `CANARY_ENABLED=false`.

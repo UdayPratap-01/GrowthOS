@@ -161,6 +161,8 @@ async def clear_integration_secrets(db: AsyncSession, row: Integration) -> Integ
         "external_account_id",
         "meta_user_id",
         "ad_accounts",
+        "customer_id",
+        "customers",
         "discovered_campaigns",
         "last_verification",
         "discovery",

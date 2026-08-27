@@ -349,7 +349,13 @@ class AdsReconciler:
                 external_id=resource_id,
             )
 
-        customer_id = (campaign.metrics or {}).get("customer_id") or settings.google_ads_login_customer_id
+        from app.integrations.google_ads_discovery import resolve_google_customer_id
+
+        customer_id = resolve_google_customer_id(
+            campaign_metrics=campaign.metrics if campaign else None,
+            integration_config=(getattr(row, "config", None) or {}) if row else None,
+            login_customer_id=settings.google_ads_login_customer_id,
+        )
         if not customer_id:
             return ReconciliationResult(
                 outcome=ReconciliationOutcome.unknown,

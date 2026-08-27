@@ -415,7 +415,7 @@ async def _finish_verification(
         },
     )
 
-    # Persist sanitized snapshot on integration.config (no migration).
+        # Persist sanitized snapshot on integration.config (no migration).
     row = await get_integration_row(
         db, organization_id=organization_id, provider=report.provider, client_id=client_id
     )
@@ -445,6 +445,27 @@ async def _finish_verification(
                         },
                     )
                 cfg["ad_accounts"] = existing[:50]
+            if camps:
+                cfg["discovered_campaigns"] = [
+                    {"id": c.get("id"), "name": c.get("name"), "status": c.get("status")}
+                    for c in camps[:25]
+                    if isinstance(c, dict)
+                ]
+            cfg["discovery_updated_at"] = report.checked_at
+        # Persist discovered Google customers/campaigns (M7).
+        if report.provider == "google_ads" and report.status == "VERIFIED" and report.canary_resources:
+            resources = report.canary_resources or {}
+            cust = resources.get("customer") or report.account or {}
+            camps = resources.get("campaigns") or []
+            if cust.get("id"):
+                cid = str(cust.get("id")).replace("-", "")
+                cfg["customer_id"] = cid
+                cfg["external_account_id"] = cid
+                existing = list(cfg.get("customers") or [])
+                ids = {str(c.get("id")) for c in existing if isinstance(c, dict)}
+                if cid not in ids:
+                    existing.insert(0, {"id": cid, "name": cust.get("name")})
+                cfg["customers"] = existing[:50]
             if camps:
                 cfg["discovered_campaigns"] = [
                     {"id": c.get("id"), "name": c.get("name"), "status": c.get("status")}
@@ -764,22 +785,21 @@ async def _verify_google_readonly(
         return report
 
     try:
-        # Use real ensure_access_token unless tests monkeypatch it; it may refresh via network.
-        # For injectable HTTP we still need a token — prefer stored access_token for mocked tests.
+        # Always refresh when stale (M7 parity with Meta ensure_meta_access_token).
+        access = await ensure_access_token(
+            db, row, organization_id=organization_id, provider="google_ads", client_id=client_id
+        )
+    except Exception as exc:
         tokens = load_tokens(row) or {}
         access = tokens.get("access_token")
         if not access:
-            access = await ensure_access_token(
-                db, row, organization_id=organization_id, provider="google_ads", client_id=client_id
+            report.authentication = {"status": "AUTHENTICATION_FAILED"}
+            report.error_category = VerificationErrorCategory.authentication.value
+            report.steps.append(
+                VerificationStepResult("authentication", False, _safe_error_detail(exc), category="AUTHENTICATION")
             )
-    except Exception as exc:
-        report.authentication = {"status": "AUTHENTICATION_FAILED"}
-        report.error_category = VerificationErrorCategory.authentication.value
-        report.steps.append(
-            VerificationStepResult("authentication", False, _safe_error_detail(exc), category="AUTHENTICATION")
-        )
-        report.checks.extend([s.as_dict() for s in report.steps])
-        return report
+            report.checks.extend([s.as_dict() for s in report.steps])
+            return report
 
     headers = {
         "Authorization": f"Bearer {access}",

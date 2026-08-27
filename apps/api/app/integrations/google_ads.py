@@ -149,7 +149,28 @@ class GoogleAdsIntegration(MarketingIntegration):
         token_data = await exchange_code(code=code, redirect_uri=self._redirect_uri())
         access_token = token_data["access_token"]
 
-        customer_id, account_label = await self._resolve_customer(access_token)
+        from app.integrations.google_ads_discovery import (
+            build_google_connection_config,
+            discover_google_customers,
+        )
+        from app.observability import events
+
+        customers: list = []
+        try:
+            customers = await discover_google_customers(access_token)
+        except Exception:
+            customers = []
+
+        # Prefer explicit MCC login customer when it is in the accessible set.
+        settings = get_settings()
+        preferred = (settings.google_ads_login_customer_id or "").replace("-", "") or None
+        config = build_google_connection_config(customers=customers, preferred_customer_id=preferred)
+        if not customers:
+            # Preserve prior soft-fail labeling when discovery fails (e.g. unapproved developer token).
+            customer_id, account_label = await self._resolve_customer(access_token)
+            config["customer_id"] = customer_id
+            config["external_account_id"] = customer_id
+            config["account_label"] = account_label
 
         org_id = UUID(payload["organization_id"])
         client_id = UUID(payload["client_id"]) if payload.get("client_id") else None
@@ -159,11 +180,7 @@ class GoogleAdsIntegration(MarketingIntegration):
             provider=self.provider,
             client_id=client_id,
             status="connected",
-            config={
-                "account_label": account_label,
-                "customer_id": customer_id,
-                "connected_at": datetime.now(timezone.utc).isoformat(),
-            },
+            config=config,
             token_payload={
                 "access_token": access_token,
                 "refresh_token": token_data.get("refresh_token"),
@@ -173,11 +190,20 @@ class GoogleAdsIntegration(MarketingIntegration):
                 "provider": self.provider,
             },
         )
+        events.integration_sync(
+            provider=self.provider,
+            organization_id=org_id,
+            success=True,
+            records=len(customers),
+            message="oauth_connected",
+        )
         return {
             "provider": self.provider,
             "organization_id": str(org_id),
             "client_id": str(client_id) if client_id else None,
-            "account_label": account_label,
+            "account_label": config.get("account_label"),
+            "customer_count": len(customers),
+            "customer_id": config.get("customer_id"),
         }
 
     async def disconnect(self, organization_id: UUID, client_id: UUID | None = None) -> ConnectionStatus:
@@ -378,6 +404,7 @@ class GoogleAdsIntegration(MarketingIntegration):
                 impressions=data["impressions"],
                 clicks=data["clicks"],
                 conversions=data["conversions"],
+                customer_id=customer_id,
             )
             count += 1
             for day_row in data["days"]:
@@ -477,6 +504,7 @@ class GoogleAdsIntegration(MarketingIntegration):
         impressions: int,
         clicks: int,
         conversions: int,
+        customer_id: str | None = None,
     ) -> Campaign:
         rows = (
             await db.execute(
@@ -493,6 +521,7 @@ class GoogleAdsIntegration(MarketingIntegration):
         )
         metrics = {
             "external_campaign_id": external_id,
+            "customer_id": str(customer_id).replace("-", "") if customer_id else None,
             "impressions": impressions,
             "clicks": clicks,
             "conversions": conversions,
@@ -509,6 +538,7 @@ class GoogleAdsIntegration(MarketingIntegration):
             existing.objective = objective
             existing.spend = spend
             existing.metrics = metrics
+            existing.external_id = existing.external_id or external_id
             existing.ad_account_id = ad_account_id
             existing.data_source = DataSource.live
             return existing
@@ -521,6 +551,7 @@ class GoogleAdsIntegration(MarketingIntegration):
             status=status,
             objective=objective,
             spend=spend,
+            external_id=external_id,
             metrics=metrics,
             data_source=DataSource.live,
         )

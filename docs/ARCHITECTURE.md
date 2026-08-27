@@ -249,3 +249,12 @@ Procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
 - Pause / resume / budget still via `AdsExecutor` + `AdsReconciler` only
 - Live execution defaults remain OFF; real Meta canary is manual
 - Docs: [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md)
+
+## Real Google verification (Milestone 7)
+
+- Customer discovery persistence (`google_ads_discovery.py`) + refresh via `ensure_access_token`
+- Campaign status mutate via `customers/{id}/campaigns:mutate`
+- Error classification via `classify_google_ads_error`
+- Budget mutate remains **UNSUPPORTED** (Google `campaignBudget` resource)
+- Live execution defaults remain OFF; real Google canary is manual
+- Docs: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md) (Real Google checklist)

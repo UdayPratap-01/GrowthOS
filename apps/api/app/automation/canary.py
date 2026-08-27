@@ -402,7 +402,16 @@ async def evaluate_canary_gate(
                     db, organization_id=organization_id, provider="google_ads", client_id=None
                 )
             cfg_cust = str((row.config or {}).get("external_account_id") or (row.config or {}).get("customer_id") or "") if row else ""
-            candidates = {cust.replace("-", ""), cfg_cust.replace("-", "")}
+            cfg_customers: list[str] = []
+            if row:
+                for c in (row.config or {}).get("customers") or []:
+                    if isinstance(c, dict) and c.get("id"):
+                        cfg_customers.append(str(c.get("id")).replace("-", ""))
+            candidates = {
+                cust.replace("-", ""),
+                cfg_cust.replace("-", ""),
+                *cfg_customers,
+            }
             candidates.discard("")
             expanded = {c.replace("-", "") for c in customers}
             ok = bool(candidates & expanded)
