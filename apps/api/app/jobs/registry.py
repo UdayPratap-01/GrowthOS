@@ -24,6 +24,11 @@ LEAD_BACKFILL = "leads.backfill_meta_contact"
 PUBLISH_DUE = "publish_due"
 CAMPAIGN_GENERATE = "campaign.generate"
 CAMPAIGN_RECONCILE = "campaign.reconcile"
+AUTOPILOT_SCHEDULER_TICK = "autopilot.scheduler_tick"
+AUTOPILOT_CYCLE = "autopilot.cycle"
+PROVIDER_RECONCILE = "provider.reconcile"
+ANALYTICS_INGEST = "analytics.ingest"
+ANALYTICS_ANALYZE = "analytics.analyze"
 
 
 def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
@@ -35,10 +40,15 @@ def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
     queue.register(VIDEO_POLL, handlers.handle_poll_video)
     queue.register(REPORT_GENERATE, handlers.handle_generate_report)
     queue.register(ANALYTICS_SYNC, handlers.handle_analytics_sync)
+    queue.register(ANALYTICS_INGEST, handlers.handle_analytics_ingest)
+    queue.register(ANALYTICS_ANALYZE, handlers.handle_analytics_analyze)
     queue.register(LEAD_BACKFILL, handlers.handle_lead_backfill)
     queue.register(PUBLISH_DUE, handlers.handle_publish_due)
     queue.register(CAMPAIGN_GENERATE, handlers.handle_generate_campaign)
     queue.register(CAMPAIGN_RECONCILE, handlers.handle_reconcile_campaign_run)
+    queue.register(AUTOPILOT_SCHEDULER_TICK, handlers.handle_autopilot_scheduler_tick)
+    queue.register(AUTOPILOT_CYCLE, handlers.handle_autopilot_cycle)
+    queue.register(PROVIDER_RECONCILE, handlers.handle_provider_reconcile)
     return queue
 
 
@@ -49,8 +59,13 @@ def registered_job_types() -> tuple[str, ...]:
         VIDEO_POLL,
         REPORT_GENERATE,
         ANALYTICS_SYNC,
+        ANALYTICS_INGEST,
+        ANALYTICS_ANALYZE,
         LEAD_BACKFILL,
         PUBLISH_DUE,
         CAMPAIGN_GENERATE,
         CAMPAIGN_RECONCILE,
+        AUTOPILOT_SCHEDULER_TICK,
+        AUTOPILOT_CYCLE,
+        PROVIDER_RECONCILE,
     )

@@ -340,6 +340,97 @@ async def handle_analytics_sync(db: AsyncSession, job: BackgroundJob) -> dict:
     }
 
 
+async def handle_analytics_ingest(db: AsyncSession, job: BackgroundJob) -> dict:
+    """
+    Normalized Meta/Google Ads performance ingestion into marketing_performance_daily.
+
+    Retryable provider failures (timeout, transport, rate limit) raise so the
+    JobQueue backoff path can retry. Permanent config/auth failures are
+    unrecoverable and must not burn attempts.
+    """
+    from app.analytics.errors import AnalyticsIngestionError
+    from app.analytics.ingestion import AnalyticsIngestionService
+
+    payload = job.payload or {}
+    provider = payload.get("provider")
+    if not provider:
+        raise UnrecoverableJobError("payload.provider is required")
+    if job.organization_id is None:
+        raise UnrecoverableJobError("analytics.ingest requires organization_id")
+
+    client_id = UUID(str(payload["client_id"])) if payload.get("client_id") else None
+    if client_id is not None:
+        from app.models.client import Client
+
+        client = await db.get(Client, client_id)
+        if client is None:
+            raise UnrecoverableJobError(f"Client {client_id} not found")
+        _assert_same_tenant(job, client, f"Client {client_id}")
+
+    actor_raw = payload.get("actor_user_id")
+    actor_user_id = UUID(str(actor_raw)) if actor_raw else None
+    lookback = int(payload.get("lookback_days") or 7)
+    entity_level = str(payload.get("entity_level") or "campaign")
+
+    try:
+        return await AnalyticsIngestionService(db).ingest(
+            organization_id=job.organization_id,
+            provider=str(provider),
+            client_id=client_id,
+            lookback_days=lookback,
+            entity_level=entity_level,
+            actor_user_id=actor_user_id,
+            trigger="job",
+        )
+    except AnalyticsIngestionError as exc:
+        if not exc.retryable:
+            raise UnrecoverableJobError(f"{exc.code}: {exc.message}") from exc
+        raise
+
+
+async def handle_analytics_analyze(db: AsyncSession, job: BackgroundJob) -> dict:
+    """
+    Deterministic performance intelligence over MarketingPerformanceDaily.
+
+    Analysis-only: never creates AIAction rows and never mutates ad platforms.
+    """
+    from app.analytics.intelligence import PerformanceIntelligenceService
+
+    if job.organization_id is None:
+        raise UnrecoverableJobError("analytics.analyze requires organization_id")
+
+    payload = job.payload or {}
+    client_id = UUID(str(payload["client_id"])) if payload.get("client_id") else None
+    if client_id is not None:
+        from app.models.client import Client
+
+        client = await db.get(Client, client_id)
+        if client is None:
+            raise UnrecoverableJobError(f"Client {client_id} not found")
+        _assert_same_tenant(job, client, f"Client {client_id}")
+
+    actor_raw = payload.get("actor_user_id")
+    actor_user_id = UUID(str(actor_raw)) if actor_raw else None
+    window_days = int(payload.get("window_days") or 7)
+    if window_days not in {7, 14, 30}:
+        raise UnrecoverableJobError("window_days must be 7, 14, or 30")
+
+    try:
+        return await PerformanceIntelligenceService(db).analyze(
+            organization_id=job.organization_id,
+            client_id=client_id,
+            window_days=window_days,
+            platform=payload.get("platform"),
+            entity_level=str(payload.get("entity_level") or "campaign"),
+            actor_user_id=actor_user_id,
+            use_ai_explanation=bool(payload.get("use_ai_explanation", True)),
+            trigger="job",
+        )
+    except ValueError as exc:
+        raise UnrecoverableJobError(str(exc)) from exc
+
+
+
 async def handle_lead_backfill(db: AsyncSession, job: BackgroundJob) -> dict:
     """Retry contact-detail retrieval for a Meta lead. See P1-7."""
     from app.services.lead_backfill_service import backfill_lead_contact
@@ -431,3 +522,221 @@ async def process_organization_jobs(db: AsyncSession, organization_id: UUID) -> 
 
     await enqueue_publish_due(db, organization_id)
     return await build_queue(db).process_due(limit=10, organization_id=organization_id)
+
+
+# --------------------------------------------------------------------------
+# Scheduled autopilot
+# --------------------------------------------------------------------------
+
+
+async def handle_autopilot_scheduler_tick(db: AsyncSession, job: BackgroundJob) -> dict:
+    """
+    Discover automation-enabled tenants and enqueue bounded autopilot cycle jobs.
+
+    Does not execute cycles itself — only enqueues work for the existing worker.
+    """
+    from app.core.config import get_settings
+    from app.jobs.autopilot_scheduler import (
+        discover_autopilot_targets,
+        enqueue_autopilot_cycle,
+        schedule_next_scheduler_tick,
+        scheduled_window_start,
+    )
+    from app.security.audit import write_audit
+
+    settings = get_settings()
+    if not settings.autopilot_scheduler_enabled:
+        logger.info("autopilot scheduler tick skipped scheduler_disabled job_id=%s", job.id)
+        return {"skipped": True, "reason": "SCHEDULER_DISABLED"}
+
+    payload = job.payload or {}
+    now = datetime.now(timezone.utc)
+    window_raw = payload.get("window")
+    if window_raw:
+        try:
+            window = datetime.fromisoformat(str(window_raw))
+            if window.tzinfo is None:
+                window = window.replace(tzinfo=timezone.utc)
+        except ValueError:
+            window = scheduled_window_start(now, settings.autopilot_interval_minutes)
+    else:
+        window = scheduled_window_start(now, settings.autopilot_interval_minutes)
+
+    logger.info(
+        "autopilot scheduler tick started job_id=%s window=%s max_orgs=%d",
+        job.id,
+        window.isoformat(),
+        settings.autopilot_max_orgs_per_cycle,
+    )
+
+    targets = await discover_autopilot_targets(
+        db, max_orgs=settings.autopilot_max_orgs_per_cycle
+    )
+    enqueued = 0
+    skipped = 0
+    failures = 0
+    enqueued_jobs: list[str] = []
+
+    for organization, client in targets:
+        try:
+            result = await enqueue_autopilot_cycle(
+                db,
+                organization=organization,
+                client=client,
+                window_start=window,
+            )
+            if result.skipped:
+                skipped += 1
+                logger.info(
+                    "autopilot cycle skipped org=%s client=%s reason=%s",
+                    organization.id,
+                    client.id,
+                    result.reason,
+                )
+            else:
+                enqueued += 1
+                if result.job is not None:
+                    enqueued_jobs.append(str(result.job.id))
+        except Exception:
+            failures += 1
+            logger.exception(
+                "autopilot cycle enqueue failed org=%s client=%s",
+                organization.id,
+                client.id,
+            )
+
+    next_job = await schedule_next_scheduler_tick(db)
+    await write_audit(
+        db,
+        action="autopilot.scheduler.tick",
+        organization_id=None,
+        user_id=None,
+        resource_type="background_job",
+        resource_id=str(job.id),
+        details={
+            "window": window.isoformat(),
+            "discovered": len(targets),
+            "enqueued": enqueued,
+            "skipped": skipped,
+            "failures": failures,
+            "next_tick_job_id": str(next_job.id) if next_job else None,
+        },
+    )
+    await db.flush()
+
+    logger.info(
+        "autopilot scheduler tick completed job_id=%s discovered=%d enqueued=%d skipped=%d failures=%d",
+        job.id,
+        len(targets),
+        enqueued,
+        skipped,
+        failures,
+    )
+    return {
+        "window": window.isoformat(),
+        "discovered": len(targets),
+        "enqueued": enqueued,
+        "skipped": skipped,
+        "failures": failures,
+        "enqueued_job_ids": enqueued_jobs,
+        "next_tick_job_id": str(next_job.id) if next_job else None,
+    }
+
+
+async def handle_autopilot_cycle(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Run one bounded autopilot cycle via AutopilotOrchestratorService."""
+    from app.jobs.autopilot_scheduler import SCHEDULER_ACTOR_USER_ID
+    from app.models.client import Client
+    from app.security.audit import write_audit
+    from app.services.autonomy_service import AutonomyService
+    from app.services.autopilot_orchestrator_service import AutopilotOrchestratorService
+
+    if job.organization_id is None:
+        raise UnrecoverableJobError("autopilot.cycle requires organization_id")
+
+    payload = job.payload or {}
+    client_id_raw = payload.get("client_id")
+    if not client_id_raw:
+        raise UnrecoverableJobError("payload.client_id is required")
+
+    client_id = UUID(str(client_id_raw))
+    client = await db.get(Client, client_id)
+    if client is None:
+        raise UnrecoverableJobError(f"Client {client_id} not found")
+    _assert_same_tenant(job, client, f"Client {client_id}")
+
+    organization = await _load_organization(db, job.organization_id)
+    settings = await AutonomyService(db).get_effective(organization.id, client_id)
+    if not settings.automation_enabled:
+        logger.info(
+            "autopilot cycle skipped automation_disabled org=%s client=%s job_id=%s",
+            organization.id,
+            client_id,
+            job.id,
+        )
+        return {"skipped": True, "reason": "AUTOMATION_DISABLED"}
+
+    max_iterations = min(int(payload.get("max_iterations") or 1), settings.max_ai_iterations or 1)
+    run_id = UUID(str(payload["run_id"])) if payload.get("run_id") else None
+
+    logger.info(
+        "autopilot cycle started org=%s client=%s job_id=%s demo=%s",
+        organization.id,
+        client_id,
+        job.id,
+        organization.demo_mode,
+    )
+
+    result = await AutopilotOrchestratorService(db).run_cycle(
+        organization,
+        client_id=client_id,
+        run_id=run_id,
+        user_id=SCHEDULER_ACTOR_USER_ID,
+        max_iterations=max_iterations,
+    )
+
+    await write_audit(
+        db,
+        action="autopilot.cycle.scheduled",
+        organization_id=organization.id,
+        user_id=None,
+        resource_type="background_job",
+        resource_id=str(job.id),
+        details={
+            "client_id": str(client_id),
+            "cycle_id": result.cycle_id,
+            "actions_created": result.actions_created,
+            "actions_blocked": result.actions_blocked,
+            "trigger": payload.get("trigger") or "scheduler",
+            "demo_mode": organization.demo_mode,
+            "errors": result.errors[:5],
+        },
+    )
+    await db.flush()
+
+    logger.info(
+        "autopilot cycle completed org=%s client=%s job_id=%s actions_created=%d",
+        organization.id,
+        client_id,
+        job.id,
+        result.actions_created,
+    )
+    return result.model_dump(mode="json")
+
+
+async def handle_provider_reconcile(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Read-only provider status lookup for an ambiguous ads mutation."""
+    from app.automation.provider_reconciliation import reconcile_action
+
+    action_id_raw = (job.payload or {}).get("action_id")
+    if not action_id_raw:
+        raise UnrecoverableJobError("payload.action_id is required")
+    if job.organization_id is None:
+        raise UnrecoverableJobError("provider.reconcile requires organization_id")
+
+    return await reconcile_action(
+        db,
+        action_id=UUID(str(action_id_raw)),
+        organization_id=job.organization_id,
+        trigger="reconciliation_job",
+    )

@@ -17,6 +17,11 @@ from app.automation.idempotency import (
 )
 from app.automation.safety import ActionValidator, PermissionChecker
 from app.automation.tenant import TargetValidator
+from app.automation.provider_reconciliation import (
+    build_reconciliation_metadata,
+    enqueue_provider_reconciliation,
+)
+from app.publishing.provider_errors import is_ambiguous_error_code
 from app.core.config import get_settings
 from app.jobs.queue import JobQueue
 from app.jobs.registry import REPORT_GENERATE
@@ -101,6 +106,13 @@ class ExecutionEngine:
 
         try:
             result = await self._dispatch(action, settings)
+            if result.get("ambiguous") or is_ambiguous_error_code(result.get("error_code")):
+                return await self._fail_ambiguous(
+                    action,
+                    result,
+                    execution,
+                    actor_user_id=actor_user_id,
+                )
             confirmed = bool(result.get("confirmed"))
             demo = bool(result.get("demo"))
             if not confirmed and not demo:
@@ -112,6 +124,7 @@ class ExecutionEngine:
                 safe_result["platform_response"] = sanitize_platform_response(safe_result["platform_response"])
             action.result = safe_result
             action.executed_at = datetime.now(timezone.utc)
+            action.executing_at = None
             if result.get("external_id"):
                 action.external_id = str(result["external_id"])
             if demo:
@@ -138,6 +151,7 @@ class ExecutionEngine:
         except Exception as exc:
             action.status = AIActionStatus.failed
             action.error = str(exc)
+            action.executing_at = None
             action.retry_count = int(action.retry_count or 0) + 1
             execution.status = AIActionStatus.failed
             execution.error_message = str(exc)
@@ -474,6 +488,7 @@ class ExecutionEngine:
     async def _fail(self, action: AIAction, error: str, actor_user_id: UUID | None) -> AIAction:
         action.status = AIActionStatus.failed
         action.error = error
+        action.executing_at = None
         await write_audit(
             self.db,
             organization_id=action.organization_id,
@@ -482,6 +497,85 @@ class ExecutionEngine:
             resource_type="ai_action",
             resource_id=str(action.id),
             details={"error": error},
+        )
+        await self.db.flush()
+        await self.db.refresh(action)
+        return action
+
+    async def _fail_ambiguous(
+        self,
+        action: AIAction,
+        result: dict,
+        execution: ActionExecution,
+        *,
+        actor_user_id: UUID | None,
+    ) -> AIAction:
+        """Provider mutation outcome unknown — do not treat as confirmed failure."""
+        error_code = result.get("error_code") or "PROVIDER_AMBIGUOUS"
+        message = result.get("message") or result.get("error") or "Provider state unknown"
+        external_id = result.get("external_id") or action.external_id
+        provider = (action.platform or "unknown").lower()
+        if provider in {"google", "google_ads"}:
+            provider_key = "google_ads"
+        elif provider in {"meta", "facebook", "instagram"}:
+            provider_key = "meta"
+        else:
+            provider_key = provider
+
+        recon = build_reconciliation_metadata(
+            provider=provider_key,
+            operation=action.action_type.value,
+            external_id=external_id,
+            error_code=error_code,
+            platform=action.platform,
+        )
+        safe_result = {
+            **result,
+            "confirmed": False,
+            "ambiguous": True,
+            "reconciliation": recon,
+        }
+        if "platform_response" in safe_result:
+            safe_result["platform_response"] = sanitize_platform_response(safe_result["platform_response"])
+
+        action.status = AIActionStatus.failed
+        action.error = f"PROVIDER_STATE_UNKNOWN: {message}"
+        action.executing_at = None
+        action.result = safe_result
+        if external_id:
+            action.external_id = str(external_id)
+
+        execution.status = AIActionStatus.failed
+        execution.error_code = error_code
+        execution.error_message = action.error
+        execution.finished_at = datetime.now(timezone.utc)
+        execution.platform_response = safe_result.get("platform_response") or {}
+
+        await write_audit(
+            self.db,
+            organization_id=action.organization_id,
+            user_id=actor_user_id,
+            action="ai_action.ambiguous",
+            resource_type="ai_action",
+            resource_id=str(action.id),
+            details={
+                "trigger": "execution",
+                "provider": provider_key,
+                "operation": action.action_type.value,
+                "error_code": error_code,
+                "external_id": external_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await enqueue_provider_reconciliation(
+            self.db,
+            action_id=action.id,
+            organization_id=action.organization_id,
+        )
+        await self._notify(
+            action,
+            title=f"Action needs reconciliation: {action.action_type.value}",
+            body=message,
         )
         await self.db.flush()
         await self.db.refresh(action)

@@ -89,6 +89,20 @@ class Worker:
                     )
                     self.stats.reclaimed += reclaimed
 
+                settings = get_settings()
+                if settings.autopilot_scheduler_enabled:
+                    from app.jobs.autopilot_scheduler import ensure_scheduler_tick
+
+                    await ensure_scheduler_tick(db)
+
+                from app.automation.stale_recovery import reap_stale_executing_actions
+
+                stale_recovered = await reap_stale_executing_actions(db)
+                if stale_recovered:
+                    logger.warning(
+                        "Recovered %d stale EXECUTING AI action(s)", len(stale_recovered)
+                    )
+
                 processed = await queue.process_due(limit=self.batch_size)
                 await db.commit()
             except Exception as exc:

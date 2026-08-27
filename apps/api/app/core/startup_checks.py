@@ -159,6 +159,27 @@ def validate_configuration(settings: Settings | None = None) -> None:
         _check_secret("SECRET_KEY", settings.secret_key, errors)
         _check_secret("ENCRYPTION_KEY", settings.encryption_key, errors)
 
+    from app.jobs.autopilot_scheduler import validate_autopilot_scheduler_settings
+
+    if settings.autopilot_scheduler_enabled:
+        for msg in validate_autopilot_scheduler_settings(settings):
+            errors.append(msg)
+
+    from app.automation.stale_recovery import validate_stale_recovery_settings
+
+    for msg in validate_stale_recovery_settings(settings):
+        errors.append(msg)
+
+    from app.analytics.intelligence import validate_performance_intelligence_settings
+
+    for msg in validate_performance_intelligence_settings(settings):
+        errors.append(msg)
+
+    from app.optimization.closed_loop import validate_optimization_settings
+
+    for msg in validate_optimization_settings(settings):
+        errors.append(msg)
+
     if env != "production":
         _raise_if_any(errors, env)
         return

@@ -196,3 +196,31 @@ When `DEMO_MODE=true` (or org flag):
 - New AI agent = implement BaseAgent + register with Orchestrator
 - New integration = implement MarketingIntegration + register factory
 - Automation (Phase 5) = ActionExecutor consuming `Approved` strategy_actions
+
+## Analytics ingestion
+
+Normalized Meta/Google Ads daily performance is stored in
+`marketing_performance_daily` and ingested via JobQueue (`analytics.ingest`).
+See [ANALYTICS_INGESTION.md](./ANALYTICS_INGESTION.md).
+
+## AI performance intelligence
+
+Deterministic comparison + signal detection over ingested performance produces
+analysis-only `performance_recommendations` (`analytics.analyze`). Lifecycle
+approval alone does not mutate platforms. See
+[AI_PERFORMANCE_INTELLIGENCE.md](./AI_PERFORMANCE_INTELLIGENCE.md).
+
+## Closed-loop optimization
+
+When `OPTIMIZATION_ENABLED=true`, recommendations flow through
+`app/optimization/` (decision → policy → MANUAL / APPROVAL_REQUIRED / AUTONOMOUS)
+and create `AIAction` rows only via existing `ActionService` / `ExecutionEngine`.
+Wired into scheduled autopilot cycles; defaults remain safe (`false`). See
+[AUTONOMOUS_MARKETING_ENGINE.md](./AUTONOMOUS_MARKETING_ENGINE.md).
+
+## Operator control & production safety (Milestone 4)
+
+Operator APIs under `/api/v1/autopilot/operator/*` and UI under `/autopilot/operator`.
+Layered kill switches / canary allowlists default OFF. Manual UNKNOWN reconciliation
+and legacy EXECUTING recovery are operator-driven (never auto re-execute).
+Canary procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).

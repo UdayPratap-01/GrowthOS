@@ -33,9 +33,11 @@ from app.models.marketing import (
     Competitor,
     ContentAsset,
     ContentCalendar,
+    MarketingPerformanceDaily,
     SocialAccount,
     SocialPost,
 )
+from app.models.performance_intelligence import PerformanceRecommendation
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
 from app.models.usage import UsageRecord
@@ -58,12 +60,14 @@ __all__ = [
     "ContentAsset",
     "AnalyticsDaily",
     "AnalyticsCampaign",
+    "MarketingPerformanceDaily",
     "Competitor",
     "Lead",
     "LeadActivity",
     "Strategy",
     "StrategyAction",
     "AIRecommendation",
+    "PerformanceRecommendation",
     "AIConversation",
     "Report",
     "Integration",

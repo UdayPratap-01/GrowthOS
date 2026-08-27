@@ -52,6 +52,16 @@ class RecommendationStatus(str, enum.Enum):
     completed = "completed"
 
 
+class PerformanceRecommendationStatus(str, enum.Enum):
+    """Lifecycle for analysis-only performance recommendations (Milestone 2)."""
+
+    new = "NEW"
+    reviewed = "REVIEWED"
+    approved = "APPROVED"
+    rejected = "REJECTED"
+    expired = "EXPIRED"
+
+
 class DataSource(str, enum.Enum):
     demo = "demo"
     live = "live"

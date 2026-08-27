@@ -212,3 +212,77 @@ def auth_sessions_revoked(*, user_id: Any, count: int) -> None:
             "revoked": count,
         },
     )
+
+
+# --------------------------------------------------------------------------
+# Autonomous optimization / production safety (Milestone 4)
+# --------------------------------------------------------------------------
+
+
+def autonomous_gate_blocked(
+    *, organization_id: Any, code: str, intent: str, detail: str | None = None
+) -> None:
+    logger.warning(
+        "Autonomous gate blocked: %s",
+        code,
+        extra={
+            "event": "autonomous.gate_blocked",
+            "org": str(organization_id),
+            "code": code,
+            "intent": intent,
+            "detail": (detail or "")[:300],
+        },
+    )
+
+
+def optimization_cycle(
+    *,
+    organization_id: Any,
+    evaluated: int,
+    created: int,
+    blocked: int,
+    approval_required: int,
+) -> None:
+    logger.info(
+        "Optimization cycle org=%s evaluated=%s created=%s blocked=%s approval=%s",
+        organization_id,
+        evaluated,
+        created,
+        blocked,
+        approval_required,
+        extra={
+            "event": "optimization.cycle",
+            "org": str(organization_id),
+            "evaluated": evaluated,
+            "actions_created": created,
+            "blocked": blocked,
+            "approval_required": approval_required,
+        },
+    )
+
+
+def reconciliation_metric(
+    *, organization_id: Any, outcome: str, trigger: str = "job"
+) -> None:
+    logger.info(
+        "Reconciliation outcome=%s",
+        outcome,
+        extra={
+            "event": "reconciliation.outcome",
+            "org": str(organization_id),
+            "outcome": outcome,
+            "trigger": trigger,
+        },
+    )
+
+
+def stale_recovery_metric(*, organization_id: Any | None, recovered: int) -> None:
+    logger.info(
+        "Stale recovery recovered=%s",
+        recovered,
+        extra={
+            "event": "stale_recovery.batch",
+            "org": str(organization_id) if organization_id else None,
+            "recovered": recovered,
+        },
+    )

@@ -179,4 +179,39 @@ async def ready(response: Response) -> dict:
         "environment": settings.env,
         "degraded": [result.name for result in degraded] or None,
         "checks": {result.name: result.as_dict() for result in results},
+        "operational": _operational_status(settings),
+    }
+
+
+def _operational_status(settings) -> dict:
+    """Non-blocking operator view of feature latches (never fails readiness)."""
+
+    def latch(enabled: bool, configured: bool = True) -> str:
+        if not configured:
+            return "NOT_CONFIGURED"
+        if not enabled:
+            return "DISABLED"
+        return "HEALTHY"
+
+    meta_cfg = bool(settings.meta_app_id and settings.meta_app_secret)
+    google_cfg = bool(
+        settings.google_client_id
+        and settings.google_client_secret
+        and settings.google_ads_developer_token
+    )
+    return {
+        "database": "HEALTHY",  # mirrored from required check; probe already failed if down
+        "job_queue": "HEALTHY",
+        "worker": "NOT_CONFIGURED",  # worker liveness is separate process
+        "scheduler": latch(settings.autopilot_scheduler_enabled),
+        "optimization_engine": latch(settings.optimization_enabled),
+        "autonomous_execution": latch(settings.autonomous_execution_enabled),
+        "kill_switch": "ENABLED" if settings.autonomous_kill_switch else "DISABLED",
+        "meta_provider": latch(settings.meta_autonomous_enabled, configured=meta_cfg)
+        if meta_cfg
+        else "NOT_CONFIGURED",
+        "google_provider": latch(settings.google_autonomous_enabled, configured=google_cfg)
+        if google_cfg
+        else "NOT_CONFIGURED",
+        "provider_verification": latch(settings.provider_verification_enabled),
     }

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -215,6 +215,82 @@ class AnalyticsCampaign(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     cpl: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     data_source: Mapped[DataSource] = mapped_column(Enum(DataSource, name="analytics_campaign_source", native_enum=False), default=DataSource.demo)
+
+
+class MarketingPerformanceDaily(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Provider-neutral daily marketing performance.
+
+    Natural key is organization + platform + entity grain + external ids + date.
+    Missing external ids are stored as empty strings so uniqueness is portable
+    across PostgreSQL and SQLite (NULLs are not unique-equal in PostgreSQL).
+    Never stores credentials or authorization material.
+    """
+
+    __tablename__ = "marketing_performance_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "platform",
+            "entity_level",
+            "external_account_id",
+            "external_campaign_id",
+            "external_ad_set_id",
+            "external_ad_id",
+            "date",
+            "granularity",
+            name="uq_marketing_perf_daily_natural_key",
+        ),
+        Index("ix_marketing_perf_daily_org_date", "organization_id", "date"),
+        Index("ix_marketing_perf_daily_org_platform_date", "organization_id", "platform", "date"),
+        Index("ix_marketing_perf_daily_org_client_date", "organization_id", "client_id", "date"),
+        Index(
+            "ix_marketing_perf_daily_org_ext_campaign",
+            "organization_id",
+            "platform",
+            "external_campaign_id",
+        ),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: account | campaign | ad_set | ad
+    entity_level: Mapped[str] = mapped_column(String(32), nullable=False, default="campaign")
+    external_account_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    external_campaign_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    external_ad_set_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    external_ad_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    granularity: Mapped[str] = mapped_column(String(16), nullable=False, default="daily")
+
+    impressions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    spend: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+    conversions: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+    leads: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revenue: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+
+    ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    cpc: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+    cpm: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+    cpl: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+    cpa: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+    roas: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    #: Sanitized provider payload fragments — never tokens or auth headers.
+    provider_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    data_source: Mapped[DataSource] = mapped_column(
+        Enum(DataSource, name="marketing_perf_daily_source", native_enum=False),
+        default=DataSource.live,
+    )
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Competitor(Base, UUIDPrimaryKeyMixin, TimestampMixin):

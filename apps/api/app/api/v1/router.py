@@ -18,6 +18,7 @@ from app.api.v1 import (
     usage,
     lead_scoring,
     leads,
+    operator,
     recommendations,
     reports,
     strategies,
@@ -41,6 +42,7 @@ api_router.include_router(reports.router)
 api_router.include_router(competitors.router)
 api_router.include_router(lead_scoring.router)
 api_router.include_router(autopilot.router)
+api_router.include_router(operator.router)
 api_router.include_router(creative.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(jobs.router)

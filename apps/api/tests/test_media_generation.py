@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 # Force demo image provider for contract tests (real PNG file, labeled DEMO)
 os.environ["DEMO_MODE"] = "true"
@@ -22,9 +22,23 @@ from app.main import app  # noqa: E402
 from app.generation.media_utils import is_valid_image, make_demo_png  # noqa: E402
 from app.models.billing import SubscriptionStatus  # noqa: E402
 from app.models.organization import OrganizationMember  # noqa: E402
+from app.models.usage import UsageRecord  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.services.billing_service import BillingService  # noqa: E402
+from app.services.usage_service import Metric, current_period  # noqa: E402
 from app.storage.object_storage import LocalObjectStorage  # noqa: E402
+
+# Period meters that accumulate on the shared demo org across the full suite.
+# Cleared only for that seeded org so this contract does not depend on prior
+# suite order — production plan limits and enforcement are unchanged.
+_DEMO_ORG_RESET_METRICS = (
+    Metric.IMAGE_GENERATION,
+    Metric.VIDEO_GENERATION,
+    Metric.AI_REQUEST,
+    Metric.CAMPAIGN_GENERATION,
+    Metric.COPY_GENERATION,
+    Metric.VARIATION_GENERATION,
+)
 
 
 async def _ensure_demo_org_subscription_usable() -> None:
@@ -32,8 +46,10 @@ async def _ensure_demo_org_subscription_usable() -> None:
     The media contract logs in as the long-lived seeded demo user. Billing's
     OrganizationSubscription for that org is created lazily with a 14-day trial
     and then ages in the shared SQLite DB — after trial_ends_at, quota-gated
-    routes return 402. Refresh it here so this file does not depend on when the
-    demo org was first billed.
+    routes return 402. Usage for the same org also accumulates across full-suite
+    runs until starter IMAGE_GENERATION hits its period cap. Refresh trial and
+    clear this org's current-period meters so isolation does not depend on suite
+    order.
     """
     async with AsyncSessionLocal() as db:
         user = await db.scalar(select(User).where(User.email == "demo@growthos.ai"))
@@ -42,8 +58,9 @@ async def _ensure_demo_org_subscription_usable() -> None:
             select(OrganizationMember).where(OrganizationMember.user_id == user.id)
         )
         assert membership is not None
+        org_id = membership.organization_id
         service = BillingService(db)
-        subscription = await service.get_subscription(membership.organization_id)
+        subscription = await service.get_subscription(org_id)
         subscription.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
         if subscription.status not in {
             SubscriptionStatus.TRIALING,
@@ -51,10 +68,17 @@ async def _ensure_demo_org_subscription_usable() -> None:
             SubscriptionStatus.PAST_DUE,
         }:
             await service.set_status(
-                membership.organization_id,
+                org_id,
                 SubscriptionStatus.ACTIVE,
                 reason="Test fixture: restore usable demo subscription.",
             )
+        await db.execute(
+            delete(UsageRecord).where(
+                UsageRecord.organization_id == org_id,
+                UsageRecord.period == current_period(),
+                UsageRecord.metric.in_(_DEMO_ORG_RESET_METRICS),
+            )
+        )
         await db.commit()
 
 

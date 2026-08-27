@@ -21,6 +21,10 @@ from app.models.enums import AIActionType
 from app.models.marketing import Campaign
 from app.models.organization import Organization
 from app.publishing.base import PublishResult
+from app.publishing.provider_errors import (
+    PROVIDER_TIMEOUT_AMBIGUOUS,
+    PROVIDER_TRANSPORT_AMBIGUOUS,
+)
 
 
 @dataclass
@@ -32,6 +36,7 @@ class AdsExecutionResult:
     error: str | None = None
     error_code: str | None = None
     demo: bool = False
+    ambiguous: bool = False
     execution_mode: str = ExecutionMode.real_execution.value
     platform_response: dict[str, Any] = field(default_factory=dict)
     before_state: dict[str, Any] = field(default_factory=dict)
@@ -48,6 +53,7 @@ class AdsExecutionResult:
             "external_id": self.external_id,
             "error": self.error,
             "error_code": self.error_code,
+            "ambiguous": self.ambiguous,
             "execution_mode": self.execution_mode,
             "platform_response": self.platform_response,
             "before_state": self.before_state,
@@ -239,20 +245,24 @@ class AdsExecutor:
         except httpx.TimeoutException:
             return AdsExecutionResult(
                 success=False,
-                status="failed",
-                message="Meta API request timed out",
-                error="TIMEOUT",
-                error_code="TIMEOUT",
+                status="ambiguous",
+                message="Meta API request timed out — provider state unknown",
+                error="Meta API request timed out",
+                error_code=PROVIDER_TIMEOUT_AMBIGUOUS,
+                ambiguous=True,
+                external_id=external_id,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
         except httpx.HTTPError as exc:
             return AdsExecutionResult(
                 success=False,
-                status="failed",
-                message="Meta API network error",
+                status="ambiguous",
+                message="Meta API network error — provider state unknown",
                 error=str(exc)[:300],
-                error_code="NETWORK_ERROR",
+                error_code=PROVIDER_TRANSPORT_AMBIGUOUS,
+                ambiguous=True,
+                external_id=external_id,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
@@ -458,20 +468,24 @@ class AdsExecutor:
         except httpx.TimeoutException:
             return AdsExecutionResult(
                 success=False,
-                status="failed",
-                message="Google Ads API request timed out",
-                error="TIMEOUT",
-                error_code="TIMEOUT",
+                status="ambiguous",
+                message="Google Ads API request timed out — provider state unknown",
+                error="Google Ads API request timed out",
+                error_code=PROVIDER_TIMEOUT_AMBIGUOUS,
+                ambiguous=True,
+                external_id=resource_id,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
         except httpx.HTTPError as exc:
             return AdsExecutionResult(
                 success=False,
-                status="failed",
-                message="Google Ads API network error",
+                status="ambiguous",
+                message="Google Ads API network error — provider state unknown",
                 error=str(exc)[:300],
-                error_code="NETWORK_ERROR",
+                error_code=PROVIDER_TRANSPORT_AMBIGUOUS,
+                ambiguous=True,
+                external_id=resource_id,
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )

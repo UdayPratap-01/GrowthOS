@@ -60,6 +60,26 @@ class AutopilotOrchestratorService:
         if analytics.insufficient_data:
             errors.append("INSUFFICIENT_DATA")
 
+        # Closed-loop: evaluate PerformanceRecommendations under policy (no duplicate execution path).
+        from app.core.config import get_settings
+        from app.optimization.closed_loop import ClosedLoopOptimizer
+
+        closed_loop_summary = {"evaluated": 0, "actions": 0, "blocked": 0, "approval_required": 0, "no_action": 0}
+        if get_settings().optimization_enabled:
+            try:
+                closed_loop_summary = await ClosedLoopOptimizer(self.db).process_client_recommendations(
+                    organization_id=organization.id,
+                    client_id=client_id,
+                    actor_user_id=user_id,
+                    limit=settings.max_ai_actions_per_cycle or 5,
+                )
+                actions_created += int(closed_loop_summary.get("actions") or 0)
+                actions_blocked += int(closed_loop_summary.get("blocked") or 0) + int(
+                    closed_loop_summary.get("approval_required") or 0
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"CLOSED_LOOP:{str(exc)[:180]}")
+
         from app.schemas.autopilot import DecisionLoopRequest
 
         for i in range(iterations):
@@ -96,7 +116,10 @@ class AutopilotOrchestratorService:
             actions_blocked=actions_blocked,
             errors=errors,
             analytics_data_source=analytics.data_source,
-            message=f"Cycle completed: {actions_created} actions created, {len(errors)} errors",
+            message=(
+                f"Cycle completed: {actions_created} actions created, "
+                f"closed_loop={closed_loop_summary}, {len(errors)} errors"
+            ),
         )
 
         if run:

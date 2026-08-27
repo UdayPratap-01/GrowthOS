@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.automation import AIAction
 from app.models.enums import AIActionStatus
+from app.publishing.provider_errors import reconciliation_blocks_retry
 
 def build_action_idempotency_key(
     *,
@@ -86,6 +88,9 @@ async def try_claim_action_for_execution(
     if action.status == AIActionStatus.completed and not force:
         return "completed"
 
+    if action.status == AIActionStatus.failed and reconciliation_blocks_retry(action) and not force:
+        return "blocked"
+
     claimable = {AIActionStatus.approved, AIActionStatus.failed}
     if force:
         claimable.add(AIActionStatus.approved)
@@ -100,11 +105,16 @@ async def try_claim_action_for_execution(
             AIAction.organization_id == action.organization_id,
             AIAction.status.in_(list(claimable)),
         )
-        .values(status=AIActionStatus.executing, error=None)
+        .values(
+            status=AIActionStatus.executing,
+            error=None,
+            executing_at=datetime.now(timezone.utc),
+        )
     )
     if result.rowcount == 1:
         action.status = AIActionStatus.executing
         action.error = None
+        action.executing_at = datetime.now(timezone.utc)
         return "claimed"
 
     await db.refresh(action)

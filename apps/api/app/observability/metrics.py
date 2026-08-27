@@ -131,6 +131,26 @@ def record_database_error(*, kind: str) -> None:
     increment("database_errors_total", labels={"kind": kind})
 
 
+def record_optimization(*, outcome: str) -> None:
+    increment("optimization_decisions_total", labels={"outcome": outcome.lower()})
+
+
+def record_reconciliation(*, outcome: str) -> None:
+    increment("reconciliation_outcomes_total", labels={"outcome": outcome.upper()})
+
+
+def record_stale_recovery(*, count: int = 1) -> None:
+    increment("stale_recoveries_total", value=count)
+
+
+def record_kill_switch_block(*, code: str) -> None:
+    increment("kill_switch_blocks_total", labels={"code": code})
+
+
+def record_provider_error(*, provider: str, code: str) -> None:
+    increment("provider_errors_total", labels={"provider": provider, "code": code})
+
+
 # --------------------------------------------------------------------------
 # Export
 # --------------------------------------------------------------------------

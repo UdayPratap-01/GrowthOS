@@ -10,6 +10,7 @@ TABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "ai_actions": [
         ("idempotency_key", "VARCHAR(255)"),
         ("external_id", "VARCHAR(255)"),
+        ("executing_at", "DATETIME"),
     ],
     "autonomy_settings": [
         ("maximum_actions_per_day", "INTEGER DEFAULT 50"),

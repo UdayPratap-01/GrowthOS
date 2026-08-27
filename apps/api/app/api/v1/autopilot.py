@@ -506,3 +506,132 @@ async def creative_library(
     return await CampaignBuildService(db).creative_library(
         auth.organization_id, client_id=client_id, asset_type=asset_type, status=status
     )
+
+
+@router.get("/optimization/policies")
+async def get_optimization_policies(
+    client_id: UUID | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Effective autonomy settings + global closed-loop thresholds (read-only composite)."""
+    from app.optimization.modes import resolve_optimization_mode
+
+    settings_out = await AutonomyService(db).get_out(auth.organization_id, client_id)
+    settings = await AutonomyService(db).get_effective(auth.organization_id, client_id)
+    cfg = app_settings()
+    return {
+        "autonomy": settings_out.model_dump(mode="json"),
+        "optimization_mode": resolve_optimization_mode(settings).value,
+        "thresholds": {
+            "optimization_enabled": cfg.optimization_enabled,
+            "min_confidence": cfg.optimization_min_confidence,
+            "cooldown_hours": cfg.optimization_cooldown_hours,
+            "opposite_cooldown_hours": cfg.optimization_opposite_cooldown_hours,
+            "max_actions_per_day": cfg.optimization_max_actions_per_day,
+            "max_consecutive_budget_increases": cfg.optimization_max_consecutive_budget_increases,
+            "min_campaign_budget": cfg.optimization_min_campaign_budget,
+            "max_autonomous_risk": cfg.optimization_max_autonomous_risk,
+            "performance_min_spend": cfg.performance_min_spend,
+            "performance_min_impressions": cfg.performance_min_impressions,
+            "performance_min_clicks": cfg.performance_min_clicks,
+            "performance_min_conversions": cfg.performance_min_conversions,
+        },
+        "notes": [
+            "Use PUT /autopilot/settings to change autonomy mode and budget caps.",
+            "OPTIMIZATION_* env vars control global closed-loop latches and cooldowns.",
+            "HIGH-risk actions never become autonomous solely due to high confidence.",
+            "Default optimization_enabled=false — existing orgs stay safe.",
+        ],
+    }
+
+
+@router.get("/optimization/status")
+async def get_optimization_status(
+    client_id: UUID | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import func, select
+
+    from app.models.ai_ops import AuditLog
+    from app.models.automation import AIAction
+    from app.models.enums import PerformanceRecommendationStatus
+    from app.models.performance_intelligence import PerformanceRecommendation
+    from app.optimization.modes import resolve_optimization_mode
+
+    settings = await AutonomyService(db).get_effective(auth.organization_id, client_id)
+    rec_filters = [PerformanceRecommendation.organization_id == auth.organization_id]
+    action_filters = [
+        AIAction.organization_id == auth.organization_id,
+        AIAction.agent == "closed_loop_optimizer",
+    ]
+    if client_id is not None:
+        rec_filters.append(PerformanceRecommendation.client_id == client_id)
+        action_filters.append(AIAction.client_id == client_id)
+
+    pending_recs = int(
+        await db.scalar(
+            select(func.count()).select_from(PerformanceRecommendation).where(
+                *rec_filters,
+                PerformanceRecommendation.status.in_(
+                    [PerformanceRecommendationStatus.new, PerformanceRecommendationStatus.reviewed]
+                ),
+            )
+        )
+        or 0
+    )
+    closed_loop_actions = int(
+        await db.scalar(select(func.count()).select_from(AIAction).where(*action_filters)) or 0
+    )
+    return {
+        "optimization_enabled": app_settings().optimization_enabled,
+        "autonomous_execution_enabled": app_settings().autonomous_execution_enabled,
+        "autonomous_kill_switch": app_settings().autonomous_kill_switch,
+        "meta_autonomous_enabled": app_settings().meta_autonomous_enabled,
+        "google_autonomous_enabled": app_settings().google_autonomous_enabled,
+        "optimization_mode": resolve_optimization_mode(settings).value,
+        "automation_enabled": settings.automation_enabled,
+        "autonomy_mode": settings.autonomy_mode.value,
+        "pending_recommendations": pending_recs,
+        "closed_loop_actions": closed_loop_actions,
+        "scheduler_enabled": app_settings().autopilot_scheduler_enabled,
+    }
+
+
+@router.get("/optimization/decisions")
+async def list_optimization_decisions(
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import select
+
+    from app.models.ai_ops import AuditLog
+
+    rows = list(
+        (
+            await db.scalars(
+                select(AuditLog)
+                .where(
+                    AuditLog.organization_id == auth.organization_id,
+                    AuditLog.action.like("optimization.%"),
+                )
+                .order_by(AuditLog.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+    return {
+        "items": [
+            {
+                "id": str(row.id),
+                "action": row.action,
+                "resource_id": row.resource_id,
+                "details": row.details or {},
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+        "total": len(rows),
+    }

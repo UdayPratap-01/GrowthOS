@@ -155,6 +155,76 @@ class Settings(BaseSettings):
     # the per-metric quota. Guards against a retry loop in a client.
     campaign_generation_rate_limit_per_hour: int = 20
 
+    # ---- Scheduled autopilot ------------------------------------------------
+    # Disabled by default. When enabled, the worker enqueues bounded autopilot
+    # cycle jobs via the existing PostgreSQL-backed job queue.
+    autopilot_scheduler_enabled: bool = False
+    autopilot_interval_minutes: int = 60
+    autopilot_max_orgs_per_cycle: int = 10
+
+    # ---- Stale AI action execution recovery --------------------------------
+    autonomous_execution_stale_timeout_minutes: int = 30
+    autonomous_execution_stale_recovery_batch_size: int = 50
+
+    # ---- Analytics ingestion ------------------------------------------------
+    # Pulls Meta/Google Ads performance into marketing_performance_daily via
+    # JobQueue. Disabled only as an emergency latch — default on for connected
+    # integrations when operators enqueue ingest jobs.
+    analytics_ingestion_enabled: bool = True
+    analytics_ingestion_lookback_days: int = 7
+    analytics_ingestion_max_lookback_days: int = 30
+    analytics_ingestion_batch_size: int = 500
+
+    # ---- Performance intelligence (analysis-only) ---------------------------
+    # Thresholds for deterministic signal detection. Recommendations never
+    # execute Meta/Google mutations in this milestone.
+    performance_min_spend: float = 50.0
+    performance_min_impressions: int = 1000
+    performance_min_clicks: int = 20
+    performance_min_conversions: float = 1.0
+    performance_significant_change_percent: float = 20.0
+    performance_sudden_change_percent: float = 50.0
+    performance_min_days_with_data: int = 3
+    performance_recommendation_ttl_days: int = 14
+
+    # ---- Closed-loop optimization (Milestone 3) ------------------------------
+    # Disabled by default so existing orgs do not become autonomous accidentally.
+    # Decisions create AIActions only through ActionService / ExecutionEngine.
+    optimization_enabled: bool = False
+    optimization_min_confidence: float = 0.55
+    optimization_cooldown_hours: int = 24
+    optimization_opposite_cooldown_hours: int = 48
+    optimization_max_actions_per_day: int = 10
+    optimization_max_consecutive_budget_increases: int = 2
+    optimization_min_campaign_budget: float = 5.0
+    # Autonomous mode may only auto-create/execute up to this risk (HIGH never).
+    optimization_max_autonomous_risk: str = "low"
+    # Evidence older than this cannot drive mutations (hours).
+    optimization_max_evidence_age_hours: int = 72
+
+    # ---- Production safety / canary (Milestone 4) — ALL default OFF ----------
+    # Layered gates: global AND provider AND optimization AND org AND canary.
+    autonomous_execution_enabled: bool = False
+    meta_autonomous_enabled: bool = False
+    google_autonomous_enabled: bool = False
+    # Emergency stop: blocks NEW autonomous mutations; does not delete recommendations.
+    autonomous_kill_switch: bool = False
+    # Canary allowlists — empty means none (safe). Comma-separated.
+    autonomous_canary_org_ids: str = ""
+    autonomous_canary_providers: str = ""  # meta,google
+    autonomous_canary_action_types: str = ""  # update_budget,pause_campaign,...
+    # Absolute daily spend-impact ceiling for autonomous budget mutations (currency units).
+    # 0 = no additional absolute cap beyond org AutonomySettings.
+    autonomous_max_daily_spend_impact: float = 0.0
+    autonomous_max_campaigns_per_cycle: int = 1
+    # Live provider verification harness (never runs in normal pytest).
+    provider_verification_enabled: bool = False
+    provider_verification_org_id: str = ""
+    provider_verification_client_id: str = ""
+    provider_verification_meta_campaign_id: str = ""
+    provider_verification_google_campaign_id: str = ""
+    provider_verification_confirm: str = ""  # must equal "I_CONFIRM_LIVE_MUTATIONS"
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

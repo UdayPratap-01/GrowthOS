@@ -41,6 +41,7 @@ const nav = [
   { href: "/recommendations", label: "Recommendations", icon: Sparkles },
   { href: "/competitors", label: "Competitors", icon: Waypoints },
   { href: "/autopilot", label: "Autopilot", icon: Rocket },
+  { href: "/autopilot/operator", label: "Operator", icon: Gauge },
   { href: "/approvals", label: "Approvals", icon: CheckSquare },
   { href: "/ai-activity", label: "AI Activity", icon: Activity },
   { href: "/ai-assistant", label: "AI Assistant", icon: Bot },
