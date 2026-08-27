@@ -49,6 +49,22 @@ class ReconciliationOutcome(str, Enum):
     unsupported = "UNSUPPORTED"
 
 
+class VerificationErrorCategory(str, Enum):
+    """Normalized categories for provider preflight / read-only verification."""
+
+    authentication = "AUTHENTICATION"
+    authorization = "AUTHORIZATION"
+    configuration = "CONFIGURATION"
+    account_not_found = "ACCOUNT_NOT_FOUND"
+    account_access = "ACCOUNT_ACCESS"
+    rate_limit = "RATE_LIMIT"
+    timeout = "TIMEOUT"
+    network = "NETWORK"
+    provider_unavailable = "PROVIDER_UNAVAILABLE"
+    api_error = "API_ERROR"
+    unknown = "UNKNOWN"
+
+
 def is_ambiguous_error_code(code: str | None) -> bool:
     return code in {PROVIDER_TIMEOUT_AMBIGUOUS, PROVIDER_TRANSPORT_AMBIGUOUS}
 

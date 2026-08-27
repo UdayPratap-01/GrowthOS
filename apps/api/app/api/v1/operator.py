@@ -44,8 +44,156 @@ class LegacyRecoverBody(BaseModel):
     reason: str = Field(min_length=3, max_length=1000)
 
 
+class ProviderVerifyBody(BaseModel):
+    confirm: str = Field(
+        ...,
+        description="Must equal I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION — read-only, no ad mutations.",
+    )
+    client_id: UUID | None = None
+
+
+class ProviderPreflightBody(BaseModel):
+    client_id: UUID | None = None
+
+
 def _recon_state(action: AIAction) -> str | None:
     return ((action.result or {}).get("reconciliation") or {}).get("state")
+
+
+def _normalize_provider_param(provider: str) -> str:
+    p = (provider or "").strip().lower()
+    if p in {"meta", "facebook"}:
+        return "meta"
+    if p in {"google", "google_ads"}:
+        return "google_ads"
+    raise HTTPException(status_code=400, detail="provider must be meta or google_ads")
+
+
+@router.get("/providers")
+async def list_provider_preflight(
+    client_id: UUID | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Sanitized preflight + last verification for Meta and Google Ads."""
+    from app.publishing.provider_preflight import run_provider_preflight
+
+    items = []
+    for provider in ("meta", "google_ads"):
+        pre = await run_provider_preflight(
+            db, organization_id=auth.organization_id, provider=provider, client_id=client_id
+        )
+        row = await get_integration_row(
+            db, organization_id=auth.organization_id, provider=provider, client_id=client_id
+        )
+        if (not row) and client_id is not None:
+            row = await get_integration_row(
+                db, organization_id=auth.organization_id, provider=provider, client_id=None
+            )
+        last = (row.config or {}).get("last_verification") if row else None
+        items.append(
+            {
+                **pre.as_dict(),
+                "last_verification": last,
+                "mutation": "DISABLED_IN_PHASE_1",
+            }
+        )
+    return {
+        "items": items,
+        "notes": [
+            "PROVIDER VERIFIED does not mean autonomous spend is enabled.",
+            "Phase 1 verification is read-only — no campaigns, ads, budgets, or spend are changed.",
+            "Confirm phrase for live verify: I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION",
+        ],
+    }
+
+
+@router.post("/providers/{provider}/preflight")
+async def provider_preflight(
+    provider: str,
+    body: ProviderPreflightBody | None = None,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.publishing.provider_preflight import run_provider_preflight
+    from app.security.audit import write_audit
+
+    provider = _normalize_provider_param(provider)
+    client_id = body.client_id if body else None
+    await write_audit(
+        db,
+        action="provider.preflight_started",
+        organization_id=auth.organization_id,
+        user_id=auth.user.id,
+        resource_type="provider",
+        resource_id=provider,
+        details={"provider": provider, "trigger": "operator"},
+    )
+    result = await run_provider_preflight(
+        db, organization_id=auth.organization_id, provider=provider, client_id=client_id
+    )
+    await write_audit(
+        db,
+        action="provider.preflight_completed",
+        organization_id=auth.organization_id,
+        user_id=auth.user.id,
+        resource_type="provider",
+        resource_id=provider,
+        details={"provider": provider, "status": result.status.value},
+    )
+    await db.commit()
+    return result.as_dict()
+
+
+@router.post("/providers/{provider}/verify")
+async def provider_verify_readonly(
+    provider: str,
+    body: ProviderVerifyBody,
+    auth: AuthContext = Depends(require_permission(Permission.integration_connect)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Explicit read-only verification against Meta/Google when connected.
+
+    Never mutates ads. Never creates AIAction. Requires confirmation phrase.
+    """
+    from app.publishing.provider_verification import verify_provider_readonly
+
+    provider = _normalize_provider_param(provider)
+    report = await verify_provider_readonly(
+        db,
+        organization_id=auth.organization_id,
+        provider=provider,
+        client_id=body.client_id,
+        confirm=body.confirm,
+        actor_user_id=auth.user.id,
+    )
+    await db.commit()
+    return report.as_dict()
+
+
+@router.get("/providers/{provider}/verification")
+async def get_provider_verification(
+    provider: str,
+    client_id: UUID | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    provider = _normalize_provider_param(provider)
+    row = await get_integration_row(
+        db, organization_id=auth.organization_id, provider=provider, client_id=client_id
+    )
+    if (not row) and client_id is not None:
+        row = await get_integration_row(
+            db, organization_id=auth.organization_id, provider=provider, client_id=None
+        )
+    last = (row.config or {}).get("last_verification") if row else None
+    return {
+        "provider": provider,
+        "last_verification": last,
+        "safe_for_mutation": False,
+        "mutation": "DISABLED_IN_PHASE_1",
+    }
 
 
 @router.get("/status")
@@ -136,6 +284,23 @@ async def operator_status(
         },
         "scheduler_enabled": cfg.autopilot_scheduler_enabled,
         "provider_verification_enabled": cfg.provider_verification_enabled,
+        "canary": {
+            "enabled": cfg.canary_enabled,
+            "org_allowlisted": (
+                auth.organization_id
+                in {
+                    UUID(p.strip())
+                    for p in (cfg.canary_allowed_org_ids or "").split(",")
+                    if p.strip()
+                }
+                if (cfg.canary_allowed_org_ids or "").strip()
+                else False
+            ),
+            "actions": cfg.canary_allowed_actions,
+            "providers": cfg.canary_allowed_providers,
+            "verification_max_age_hours": cfg.provider_verification_max_age_hours,
+            "note": "Canary success ≠ unrestricted production autonomy",
+        },
     }
 
 
@@ -386,3 +551,103 @@ async def legacy_recover(
         "recovery": body.recovery.value,
         "reconciliation_state": _recon_state(updated),
     }
+
+
+# ---- Live canary (M5 Phase 2) -------------------------------------------------
+
+
+class CanaryDryRunBody(BaseModel):
+    provider: str
+    action_type: str = Field(..., description="pause_campaign | resume_campaign")
+    campaign_id: UUID | None = None
+    external_campaign_id: str | None = None
+    client_id: UUID | None = None
+
+
+class CanaryExecuteBody(BaseModel):
+    provider: str
+    action_type: str
+    confirm: str = Field(
+        ...,
+        description="Must equal I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION",
+    )
+    campaign_id: UUID | None = None
+    external_campaign_id: str | None = None
+    client_id: UUID | None = None
+
+
+@router.get("/canary/status")
+async def get_canary_status(
+    client_id: UUID | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Operator canary readiness — never exposes secrets."""
+    from app.automation.canary import canary_status
+
+    return await canary_status(db, organization_id=auth.organization_id, client_id=client_id)
+
+
+@router.get("/canary/history")
+async def get_canary_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.automation.canary import list_canary_history
+
+    return await list_canary_history(db, organization_id=auth.organization_id, limit=limit)
+
+
+@router.post("/canary/dry-run")
+async def post_canary_dry_run(
+    body: CanaryDryRunBody,
+    auth: AuthContext = Depends(require_permission(Permission.action_approve)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Full canary decision path without creating a mutating AIAction."""
+    from app.automation.canary import canary_dry_run
+
+    provider = _normalize_provider_param(body.provider)
+    result = await canary_dry_run(
+        db,
+        organization_id=auth.organization_id,
+        provider=provider,
+        action_type=body.action_type,
+        campaign_id=body.campaign_id,
+        external_campaign_id=body.external_campaign_id,
+        client_id=body.client_id,
+        actor_user_id=auth.user.id,
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/canary/execute")
+async def post_canary_execute(
+    body: CanaryExecuteBody,
+    auth: AuthContext = Depends(require_permission(Permission.action_execute)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Explicit live canary via ActionService → ExecutionEngine only.
+
+    Requires I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION and all canary gates.
+    """
+    from app.automation.canary import canary_execute
+
+    provider = _normalize_provider_param(body.provider)
+    result = await canary_execute(
+        db,
+        organization_id=auth.organization_id,
+        provider=provider,
+        action_type=body.action_type,
+        campaign_id=body.campaign_id,
+        external_campaign_id=body.external_campaign_id,
+        client_id=body.client_id,
+        actor_user_id=auth.user.id,
+        confirm=body.confirm,
+    )
+    await db.commit()
+    return result
+

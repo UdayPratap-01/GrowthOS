@@ -224,3 +224,19 @@ Operator APIs under `/api/v1/autopilot/operator/*` and UI under `/autopilot/oper
 Layered kill switches / canary allowlists default OFF. Manual UNKNOWN reconciliation
 and legacy EXECUTING recovery are operator-driven (never auto re-execute).
 Canary procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
+
+## Provider verification Phase 1 (Milestone 5)
+
+Read-only Meta/Google preflight + verification. Never mutates ads or enables autonomy.
+See [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md).
+**Verified ≠ autonomous spend enabled.**
+
+## Controlled live canary Phase 2 (Milestone 5)
+
+Authoritative gate in `app/automation/canary.py`. Dry-run and execute go through
+**existing** ActionService → ExecutionEngine only (no second scheduler/engine).
+Empty `CANARY_ALLOWED_*` allowlists deny all. Stale verification
+(`PROVIDER_VERIFICATION_MAX_AGE_HOURS`) blocks live canary.
+Confirm: `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION`.
+**Canary success ≠ unrestricted production autonomy.**
+Procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).

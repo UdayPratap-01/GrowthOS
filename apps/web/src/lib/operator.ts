@@ -15,6 +15,52 @@ export type OperatorStatus = {
   usage: { closed_loop_actions_today: number; max_actions_per_day: number };
   kill_switch: { enabled: boolean; effect: string };
   scheduler_enabled: boolean;
+  canary?: {
+    enabled: boolean;
+    org_allowlisted: boolean;
+    actions: string;
+    providers: string;
+    verification_max_age_hours: number;
+    note: string;
+  };
+};
+
+export type CanaryStatus = {
+  canary_enabled: boolean;
+  readiness: string;
+  environment: string;
+  kill_switch: boolean;
+  autonomous_execution_enabled: boolean;
+  optimization_enabled: boolean;
+  allowlists: {
+    orgs_configured: boolean;
+    providers: string;
+    actions: string;
+    environments: string;
+    meta_ad_accounts_configured: boolean;
+    meta_campaigns_configured: boolean;
+    google_customers_configured: boolean;
+    google_campaigns_configured: boolean;
+  };
+  limits: {
+    max_actions_per_run: number;
+    max_actions_per_day: number;
+    max_spend_impact: number;
+    actions_used_24h: number;
+    actions_remaining_24h: number;
+    verification_max_age_hours: number;
+  };
+  providers: Array<{
+    provider: string;
+    connected: boolean;
+    verification_status?: string | null;
+    verification_checked_at?: string | null;
+    account_hint?: string | null;
+  }>;
+  eligible_actions: string[];
+  preferred_actions: string[];
+  confirm_phrase: string;
+  notes: string[];
 };
 
 export type AmbiguousAction = {

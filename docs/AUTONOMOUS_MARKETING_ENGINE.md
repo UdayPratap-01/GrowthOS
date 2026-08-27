@@ -337,6 +337,20 @@ Tenant isolation + RBAC on all routes. Prefer extending these over duplicating l
 
 `optimization.recommendation_evaluated`, `optimization.policy_blocked`, `optimization.approval_required`, `optimization.action_created`, `optimization.action_skipped`, `optimization.cooldown_blocked`, `optimization.autonomous_action_created` — payloads sanitized (no tokens/secrets).
 
+Provider Phase 1 (see [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md)): `provider.preflight_*`, `provider.verification_*`.
+
+### Live canary Phase 2 (Milestone 5)
+
+See [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
+
+- Module: `app/automation/canary.py` — single gate; empty allowlists = deny
+- APIs: `GET/POST /autopilot/operator/canary/{status,history,dry-run,execute}`
+- Confirm: `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION` (not the read-only phrase)
+- Preferred actions: `pause_campaign`, `resume_campaign` via ActionService only
+- Post-action: AdsReconciler; UNKNOWN → existing reconciliation (no auto-retry)
+- Audit: `canary.dry_run`, `canary.blocked`, `canary.execution_*`, `canary.post_verification_*`, `canary.reconciliation_required`
+- **Verified ≠ autonomous spend. Canary success ≠ unrestricted autonomy.**
+
 ### Database
 
 No new Milestone 3 migration. Reuses `performance_recommendations`, `ai_actions`, `action_executions`, `autonomy_settings`, and audit events. Decision snapshots live in recommendation JSON.

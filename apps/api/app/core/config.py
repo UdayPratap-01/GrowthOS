@@ -224,6 +224,24 @@ class Settings(BaseSettings):
     provider_verification_meta_campaign_id: str = ""
     provider_verification_google_campaign_id: str = ""
     provider_verification_confirm: str = ""  # must equal "I_CONFIRM_LIVE_MUTATIONS"
+    # Phase 1/2: verification snapshot older than this blocks live canary.
+    provider_verification_max_age_hours: int = 24
+
+    # ---- Live operator canary (M5 Phase 2) — ALL default OFF / empty ----------
+    # Empty allowlists mean NO canary execution (never "allow all").
+    canary_enabled: bool = False
+    canary_allowed_org_ids: str = ""
+    canary_allowed_providers: str = ""  # meta,google_ads
+    canary_allowed_meta_ad_accounts: str = ""
+    canary_allowed_meta_campaigns: str = ""
+    canary_allowed_google_customers: str = ""
+    canary_allowed_google_campaigns: str = ""
+    canary_allowed_actions: str = ""  # pause_campaign,resume_campaign only recommended
+    canary_allowed_environments: str = ""  # empty = none; e.g. development,staging
+    canary_max_actions_per_run: int = 1
+    canary_max_actions_per_day: int = 1
+    # Pause/resume have zero spend impact; budget canaries still check this when enabled.
+    canary_max_spend_impact: float = 0.0
 
     @property
     def cors_origins(self) -> list[str]:

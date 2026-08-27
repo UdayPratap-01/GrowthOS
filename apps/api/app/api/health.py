@@ -199,6 +199,10 @@ def _operational_status(settings) -> dict:
         and settings.google_client_secret
         and settings.google_ads_developer_token
     )
+    # Provider verification health is configuration presence only — never implies
+    # autonomous execution. Missing credentials in demo/dev is NOT_CONFIGURED, not FAILED.
+    meta_verify = "NOT_CONFIGURED" if not meta_cfg else "CONFIGURED"
+    google_verify = "NOT_CONFIGURED" if not google_cfg else "CONFIGURED"
     return {
         "database": "HEALTHY",  # mirrored from required check; probe already failed if down
         "job_queue": "HEALTHY",
@@ -213,5 +217,18 @@ def _operational_status(settings) -> dict:
         "google_provider": latch(settings.google_autonomous_enabled, configured=google_cfg)
         if google_cfg
         else "NOT_CONFIGURED",
+        "meta_verification": meta_verify,
+        "google_verification": google_verify,
         "provider_verification": latch(settings.provider_verification_enabled),
+        "live_canary": (
+            "DISABLED"
+            if not settings.canary_enabled
+            else (
+                "NOT_CONFIGURED"
+                if not (settings.canary_allowed_org_ids or "").strip()
+                or not (settings.canary_allowed_actions or "").strip()
+                else ("BLOCKED" if settings.autonomous_kill_switch else "HEALTHY")
+            )
+        ),
+        "note": "Provider CONFIGURED/VERIFIED does not enable autonomous spend; canary success ≠ unrestricted autonomy",
     }

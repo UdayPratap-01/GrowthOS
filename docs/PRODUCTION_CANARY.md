@@ -1,23 +1,110 @@
-# Production Canary Procedure — Autonomous Marketing
+# Production Canary — Controlled Live Provider Execution (M5 Phase 2)
 
-**Verdict:** GrowthOS is **not** production-ready for live autonomous Meta/Google spend until live provider verification is completed with real credentials.
+**Verdict:** GrowthOS is **code-ready for controlled canary testing** when credentials and allowlists are configured. It is **not** approved for unrestricted autonomous Meta/Google spend.
 
-This document is the controlled enablement sequence for a single canary organization.
+## Core distinctions
 
-## Defaults (must remain)
+| Phrase | Means | Does NOT mean |
+|--------|--------|----------------|
+| Provider VERIFIED | Read-only connectivity + account/campaign discovery succeeded | Autonomous spend enabled |
+| Canary successful | One explicit, allowlisted mutation was verified post-action | Unrestricted production autonomy approved |
+| Autonomous OFF | Default safe posture | Canary cannot run (canary is separate, still gated) |
+
+Progression (never skip):
+
+```
+READ-ONLY VERIFIED
+  → CANARY CONFIGURED (allowlists non-empty)
+  → DRY RUN PASSED
+  → EXPLICIT HUMAN CONFIRMATION
+  → SINGLE CONTROLLED CANARY ACTION (ActionService)
+  → POST-ACTION VERIFICATION
+  → RECONCILIATION IF UNCERTAIN
+  → OPERATOR REVIEW
+  → ONLY THEN consider next production stage
+```
+
+## Defaults (must remain OFF / empty)
 
 | Gate | Default |
 |------|---------|
+| `CANARY_ENABLED` | `false` |
+| `CANARY_ALLOWED_*` allowlists | empty = **deny all** |
 | `AUTONOMOUS_EXECUTION_ENABLED` | `false` |
-| `META_AUTONOMOUS_ENABLED` | `false` |
-| `GOOGLE_AUTONOMOUS_ENABLED` | `false` |
+| `META_AUTONOMOUS_ENABLED` / `GOOGLE_AUTONOMOUS_ENABLED` | `false` |
 | `OPTIMIZATION_ENABLED` | `false` |
 | `AUTONOMOUS_KILL_SWITCH` | `false` |
-| `AUTOPILOT_SCHEDULER_ENABLED` | `false` |
-| `PROVIDER_VERIFICATION_ENABLED` | `false` |
-| Canary org/provider/action lists | empty (none allowed) |
 
-Empty canary lists mean **no** autonomous mutations.
+Empty allowlists **never** mean allow-all.
+
+## Architecture
+
+Canary does **not** add a second execution engine or scheduler.
+
+```
+Operator API
+  → canary gate (authoritative)
+  → ActionService.create
+  → ActionService.approve
+  → ExecutionEngine
+  → provider executor
+  → AdsReconciler (post-action read)
+  → UNKNOWN → existing reconciliation (no auto-retry)
+```
+
+Module: `apps/api/app/automation/canary.py`
+
+## Confirmation phrases
+
+| Use | Phrase |
+|-----|--------|
+| Read-only provider verify | `I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION` |
+| Live canary execute | `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION` |
+
+Do not reuse these interchangeably.
+
+## Configuration
+
+See `.env.example`. Key variables:
+
+- `CANARY_ENABLED`
+- `CANARY_ALLOWED_ORG_IDS`
+- `CANARY_ALLOWED_PROVIDERS` (`meta`, `google_ads`)
+- `CANARY_ALLOWED_META_AD_ACCOUNTS` / `CANARY_ALLOWED_META_CAMPAIGNS`
+- `CANARY_ALLOWED_GOOGLE_CUSTOMERS` / `CANARY_ALLOWED_GOOGLE_CAMPAIGNS`
+- `CANARY_ALLOWED_ACTIONS` (prefer `pause_campaign,resume_campaign`)
+- `CANARY_ALLOWED_ENVIRONMENTS` (empty = none; e.g. `development,staging`)
+- `CANARY_MAX_ACTIONS_PER_RUN` / `CANARY_MAX_ACTIONS_PER_DAY`
+- `CANARY_MAX_SPEND_IMPACT` (pause/resume budget impact = 0)
+- `PROVIDER_VERIFICATION_MAX_AGE_HOURS`
+
+Also require org `automation_enabled=true` so ActionService can process financial actions.
+
+## Gate codes
+
+Examples: `BLOCKED_CANARY_DISABLED`, `BLOCKED_ORG_NOT_ALLOWLISTED`, `BLOCKED_ACCOUNT_NOT_ALLOWLISTED`, `BLOCKED_CAMPAIGN_NOT_ALLOWLISTED`, `BLOCKED_ACTION_NOT_ALLOWLISTED`, `BLOCKED_PROVIDER_NOT_VERIFIED`, `BLOCKED_STALE_VERIFICATION`, `BLOCKED_KILL_SWITCH`, `BLOCKED_CAPABILITY`, `BLOCKED_POLICY`, `BLOCKED_DAILY_LIMIT`, `BLOCKED_DUPLICATE`, `BLOCKED_RECONCILIATION`, `BLOCKED_INVALID_CONFIRM`.
+
+## APIs
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/autopilot/operator/canary/status` | Readiness, limits, allowlist presence |
+| GET | `/autopilot/operator/canary/history` | Canary AIAction history |
+| POST | `/autopilot/operator/canary/dry-run` | Full gate path; **no mutation** |
+| POST | `/autopilot/operator/canary/execute` | Live canary; confirm phrase + RBAC |
+
+Members cannot dry-run or execute. Ownership of campaigns is resolved server-side.
+
+## Supported actions (Phase 2)
+
+Prefer:
+
+- `pause_campaign`
+- `resume_campaign`
+
+Budget updates remain subject to existing capability / policy / risk limits. Google `update_budget` stays **UNSUPPORTED**.
+
+Pause/resume: **budget impact = 0**, but pause remains **HIGH** business risk.
 
 ## Emergency stop
 
@@ -25,85 +112,40 @@ Empty canary lists mean **no** autonomous mutations.
 AUTONOMOUS_KILL_SWITCH=true
 ```
 
-Effect:
+Blocks **new** live canary mutations. Does not delete recommendations or rewrite completed provider state. UI shows: **KILL SWITCH ACTIVE — NEW LIVE MUTATIONS BLOCKED**.
 
-- Analysis / recommendations continue
-- Dashboards continue
-- **NEW autonomous mutation AIActions are blocked** (`AUTONOMOUS_KILL_SWITCH_ENABLED`)
-- Operator-approved recommendation approval still follows approval policy (re-evaluates policy)
-- In-flight actions are not silently corrupted
-- Recommendations are not deleted
+## Safe enablement sequence
 
-## Canary enablement sequence
-
-1. Connect a **test** Meta and/or Google Ads account (sandbox / non-production spend).
-2. Confirm credentials via integrations UI — never paste tokens into tickets.
-3. Choose **one** organization UUID, **one** client, **one** campaign with a known `external_id`.
-4. Set canary allowlists:
-
-```bash
-AUTONOMOUS_CANARY_ORG_IDS=<org-uuid>
-AUTONOMOUS_CANARY_PROVIDERS=meta
-AUTONOMOUS_CANARY_ACTION_TYPES=update_budget
-AUTONOMOUS_MAX_CAMPAIGNS_PER_CYCLE=1
-AUTONOMOUS_MAX_DAILY_SPEND_IMPACT=50
-```
-
-5. Enable provider + global autonomous latch **only after** allowlists:
-
-```bash
-META_AUTONOMOUS_ENABLED=true
-AUTONOMOUS_EXECUTION_ENABLED=true
-```
-
-6. Enable optimization analysis + closed loop:
-
-```bash
-OPTIMIZATION_ENABLED=true
-```
-
-7. In Autopilot settings for that org/client:
-
-- `automation_enabled=true`
-- Start with `assisted` (APPROVAL_REQUIRED) — **not** autonomous
-- Strict `maximum_budget_increase_percentage` / `maximum_campaign_budget`
-- Narrow `allowed_actions`
-
-8. Ingest analytics → run performance intelligence → review recommendation evidence.
-9. Manually **approve** the first recommendation from Operator UI (`/autopilot/recommendations`).
-10. Observe provider state in Ads Manager; confirm `AIAction` COMPLETED (or reconcile if ambiguous).
-11. Verify analytics ingestion reflects the change.
-12. Only then consider `autonomy_mode=autonomous` with `require_approval_for_financial_actions=false` for **LOW** risk only (`OPTIMIZATION_MAX_AUTONOMOUS_RISK=low`).
-
-## Live provider verification
-
-```bash
-PROVIDER_VERIFICATION_ENABLED=true
-PROVIDER_VERIFICATION_CONFIRM=I_CONFIRM_LIVE_MUTATIONS
-PROVIDER_VERIFICATION_ORG_ID=...
-PROVIDER_VERIFICATION_CLIENT_ID=...
-PROVIDER_VERIFICATION_META_CAMPAIGN_ID=...   # test campaign only
-PROVIDER_VERIFICATION_GOOGLE_CAMPAIGN_ID=... # optional
-```
-
-If credentials are unavailable:
-
-**LIVE PROVIDER VERIFICATION NOT RUN — CREDENTIALS REQUIRED**
-
-That is an acceptable outcome. Do not claim live verification.
-
-## Operator surfaces
-
-- `/autopilot/operator` — status / kill switch / providers
-- `/autopilot/recommendations` — approve/reject (backend re-eval)
-- `/autopilot/actions` + detail — lifecycle
-- `/autopilot/reconciliation` — UNKNOWN resolve + legacy EXECUTING
-- `/autopilot/settings` — read-only safety snapshot
+1. Connect test Meta/Google integrations (never commit secrets).
+2. Run read-only verify (`I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION`).
+3. Note ad account / campaign IDs from `canary_resources`.
+4. Set allowlists + `CANARY_ALLOWED_ENVIRONMENTS` for this environment.
+5. Set org `automation_enabled=true`.
+6. `CANARY_ENABLED=true`.
+7. Operator UI → Dry Run until ALLOWED.
+8. Execute once with `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION`.
+9. Confirm post-verification; if UNKNOWN, use existing reconciliation — **do not auto-retry**.
+10. Leave autonomous latches OFF unless a later milestone explicitly authorizes them.
 
 ## Rollback
 
-1. `AUTONOMOUS_KILL_SWITCH=true`
-2. `AUTONOMOUS_EXECUTION_ENABLED=false`
-3. `OPTIMIZATION_ENABLED=false` (optional; stops closed-loop creates)
-4. Clear canary lists
-5. Resolve any UNKNOWN actions manually — never auto-re-execute
+1. Set `AUTONOMOUS_KILL_SWITCH=true` and/or `CANARY_ENABLED=false`.
+2. Clear allowlists if needed.
+3. Resolve UNKNOWN actions via operator reconciliation UI.
+4. Manually reverse campaign state in Ads Manager if required.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|--------|
+| NOT_CONFIGURED | Empty allowlists or environments |
+| BLOCKED_STALE_VERIFICATION | Re-run read-only verify |
+| BLOCKED_KILL_SWITCH | Kill switch on |
+| BLOCKED_RECONCILIATION | Resolve UNKNOWN first |
+| Dry-run OK, execute blocked | Confirm phrase / kill switch flipped between calls |
+
+## Related docs
+
+- [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md) — Phase 1 read-only
+- [AUTONOMOUS_MARKETING_ENGINE.md](./AUTONOMOUS_MARKETING_ENGINE.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)

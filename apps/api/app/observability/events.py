@@ -286,3 +286,36 @@ def stale_recovery_metric(*, organization_id: Any | None, recovered: int) -> Non
             "recovered": recovered,
         },
     )
+
+
+def provider_verification(
+    *, organization_id: Any, provider: str, outcome: str
+) -> None:
+    logger.info(
+        "Provider verification %s: %s",
+        provider,
+        outcome,
+        extra={
+            "event": "provider.verification",
+            "org": str(organization_id),
+            "provider": provider,
+            "outcome": outcome,
+        },
+    )
+
+
+def canary_lifecycle(
+    *, organization_id: Any, provider: str, outcome: str
+) -> None:
+    """Live canary dry-run / execute lifecycle — never logs secrets."""
+    logger.info(
+        "Canary %s provider=%s",
+        outcome,
+        provider,
+        extra={
+            "event": "canary.lifecycle",
+            "org": str(organization_id),
+            "provider": provider,
+            "outcome": outcome,
+        },
+    )

@@ -129,15 +129,19 @@ def sanitize_platform_response(data: dict | None) -> dict:
     """Strip credential-like fields before persistence."""
     if not data:
         return {}
-    blocked = {"access_token", "refresh_token", "client_secret", "authorization", "token"}
+    blocked = {"access_token", "refresh_token", "client_secret", "authorization", "token", "developer_token", "api_key", "password"}
     clean: dict = {}
     for key, value in data.items():
-        if key.lower() in blocked:
+        if key.lower() in blocked or "token" in key.lower() or "secret" in key.lower():
             continue
         if isinstance(value, dict):
             nested = sanitize_platform_response(value)
             if nested:
                 clean[key] = nested
+        elif isinstance(value, list):
+            clean[key] = [
+                sanitize_platform_response(v) if isinstance(v, dict) else v for v in value
+            ]
         else:
             clean[key] = value
     return clean
