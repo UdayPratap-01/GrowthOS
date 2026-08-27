@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.db.session import engine
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
+from app.observability.security_headers import SecurityHeadersMiddleware
 import app.models  # noqa: F401 — register models
 
 
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     # Added first so it is outermost: the request ID must exist before any other
     # middleware or handler runs, and must survive into the error response.
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

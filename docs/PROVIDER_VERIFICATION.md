@@ -13,6 +13,17 @@ Milestone 6 completes the **Meta OAuth + long-lived token + ad-account discovery
 | **AUTOMATED TEST VERIFICATION** | Mocked Graph API tests in CI (no real credentials) |
 | **REAL META VERIFICATION** | Manual canary with live Meta App + test ad account |
 | **PRODUCTION SIGN-OFF** | Explicit later approval for autonomous spend (not M6) |
+| **M8 PRODUCTION DEPLOY** | Platform packaging / CI / runbooks — **not** provider live verification |
+
+Milestone 8 prepares controlled production *deployment* of the product platform.
+It does **not** flip Meta/Google live execution. Until real canaries pass:
+
+```text
+LIVE ADS = OFF
+AUTONOMOUS MUTATIONS = OFF
+```
+
+See [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) and [PRODUCTION_RUNBOOK.md](./PRODUCTION_RUNBOOK.md).
 
 ## What Phase 1 does
 

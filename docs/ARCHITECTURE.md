@@ -258,3 +258,12 @@ Procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
 - Budget mutate remains **UNSUPPORTED** (Google `campaignBudget` resource)
 - Live execution defaults remain OFF; real Google canary is manual
 - Docs: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md) (Real Google checklist)
+
+## Production deployment packaging (Milestone 8)
+
+- CI: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (pytest + alembic + frontend)
+- Security headers on API responses; non-root API/web container users
+- Prod-shaped compose: [`docker-compose.prod.yml`](../docker-compose.prod.yml)
+- Ops: [PRODUCTION_RUNBOOK.md](./PRODUCTION_RUNBOOK.md), [BACKUP_AND_DR.md](./BACKUP_AND_DR.md), [SECRET_ROTATION.md](./SECRET_ROTATION.md)
+- Matrix: [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md)
+- **Does not** enable live ads. Hosted cutover (domain/TLS/backups) remains operator-owned.

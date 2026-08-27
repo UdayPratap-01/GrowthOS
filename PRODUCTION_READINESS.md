@@ -9,6 +9,34 @@
 
 ---
 
+## Milestone 8 — Production deployment packaging (2026-08-27)
+
+**Status:** `M8 CODE/INFRASTRUCTURE READY — PRODUCTION DEPLOYMENT PENDING`
+
+M8 adds CI, security headers, non-root API image, prod-shaped compose template,
+and ops runbooks. It does **not** enable live ads and does **not** claim a
+hosted production cutover without operator evidence.
+
+| Deliverable | Location |
+|-------------|----------|
+| Readiness matrix | [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) |
+| Runbook | [`docs/PRODUCTION_RUNBOOK.md`](docs/PRODUCTION_RUNBOOK.md) |
+| Backups / DR | [`docs/BACKUP_AND_DR.md`](docs/BACKUP_AND_DR.md) |
+| Secret rotation | [`docs/SECRET_ROTATION.md`](docs/SECRET_ROTATION.md) |
+| CI | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Prod compose template | [`docker-compose.prod.yml`](docker-compose.prod.yml) |
+
+Provider gates (unchanged by M8):
+
+```text
+META LIVE VERIFICATION = PENDING
+GOOGLE LIVE VERIFICATION = PENDING
+LIVE EXECUTION = OFF
+AUTONOMOUS MUTATIONS = OFF
+```
+
+---
+
 ## 0. Hardening pass — 2026-08-10 (post-audit update)
 
 **Verdict is unchanged: NOT READY for a payment-taking public launch** (billing

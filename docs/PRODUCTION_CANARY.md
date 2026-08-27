@@ -37,6 +37,13 @@ READ-ONLY VERIFIED
 
 Empty allowlists **never** mean allow-all.
 
+## Milestone 8 note
+
+Production deployment packaging (CI, runbooks, compose template) does **not**
+change these defaults. Deploying to production with Meta/Google credentials
+present still keeps canary and autonomous execution **OFF** until operators
+explicitly configure allowlists and confirm phrases.
+
 ## Architecture
 
 Canary does **not** add a second execution engine or scheduler.

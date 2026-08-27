@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: growthos
+          POSTGRES_PASSWORD: growthos
+          POSTGRES_DB: growthos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U growthos -d growthos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      ENVIRONMENT: test
+      DEMO_MODE: "false"
+      SECRET_KEY: ci-test-secret-key-not-for-production-use-32b
+      ENCRYPTION_KEY: c07bd18492af6c3e59f2c41b7ae0d63528c1fb47e0a95d3ce7b6108fa24d9e35
+      DATABASE_URL: postgresql+asyncpg://growthos:growthos@localhost:5432/growthos_test
+      DATABASE_URL_SYNC: postgresql://growthos:growthos@localhost:5432/growthos_test
+      REDIS_URL: redis://localhost:6379/0
+      AI_PROVIDER: mock
+      IMAGE_PROVIDER: demo
+      VIDEO_PROVIDER: none
+      STORAGE_BACKEND: local
+      STORAGE_LOCAL_PATH: ./storage
+      API_CORS_ORIGINS: http://localhost:3000
+      AUTONOMOUS_EXECUTION_ENABLED: "false"
+      CANARY_ENABLED: "false"
+      PROVIDER_VERIFICATION_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Alembic upgrade + check
+        run: |
+          alembic upgrade head
+          alembic check
+      - name: Pytest
+        run: |
+          PYTHONPATH=. pytest -q
+
+  web:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        env:
+          NEXT_PUBLIC_ENVIRONMENT: production
+          NEXT_PUBLIC_API_URL: https://api.example.com
+        run: npm run build

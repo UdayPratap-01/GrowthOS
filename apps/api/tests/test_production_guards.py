@@ -74,6 +74,7 @@ def test_dockerfile_does_not_seed_on_startup():
     cmd_lines = [ln for ln in content.splitlines() if ln.startswith("CMD")]
     assert cmd_lines, "Dockerfile must define a CMD"
     assert not any("app.demo.seed" in ln for ln in cmd_lines), "Container startup must not seed demo data"
+    assert "USER growthos" in content, "API container must not run as root"
 
 
 # --------------------------------------------------------------------------

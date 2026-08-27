@@ -775,6 +775,12 @@ implemented — they are not security fixes required by the above):
 
 ## P2 — Launch requirements
 
+> **Milestone 8 note (2026-08-27):** CI, security headers, non-root API image,
+> prod compose template, and ops runbooks landed. See
+> [`docs/PRODUCTION_TODO.md`](docs/PRODUCTION_TODO.md) for the short M8 follow-up
+> list. Live Meta/Google verification remains **PENDING**; do not enable
+> `AUTONOMOUS_EXECUTION_ENABLED` / `CANARY_ENABLED` for a generic deploy.
+>
 > **Status — P2-A (AI creative & campaign engine) completed 2026-08-11.** It is a
 > capability item rather than one of the numbered launch blockers below, and it
 > closes none of them: no payments are taken and nothing is published. It is
