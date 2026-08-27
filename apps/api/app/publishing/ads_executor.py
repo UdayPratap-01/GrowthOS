@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.mode import ExecutionMode, effective_demo_mode
 from app.integrations.google_oauth import ensure_access_token
 from app.integrations.meta_family import META_GRAPH
+from app.integrations.meta_oauth import ensure_meta_access_token
 from app.integrations.persistence import get_integration_row, load_tokens
 from app.models.automation import AIAction
 from app.models.enums import AIActionType
@@ -24,6 +25,7 @@ from app.publishing.base import PublishResult
 from app.publishing.provider_errors import (
     PROVIDER_TIMEOUT_AMBIGUOUS,
     PROVIDER_TRANSPORT_AMBIGUOUS,
+    classify_meta_graph_error,
 )
 
 
@@ -161,7 +163,15 @@ class AdsExecutor:
                 self.db, organization_id=action.organization_id, provider="meta", client_id=None
             )
         tokens = load_tokens(row) if row else None
-        access_token = (tokens or {}).get("access_token")
+        try:
+            access_token = await ensure_meta_access_token(
+                self.db,
+                row,
+                organization_id=action.organization_id,
+                client_id=action.client_id,
+            ) if row else None
+        except Exception:
+            access_token = (tokens or {}).get("access_token")
         if not access_token:
             return AdsExecutionResult(
                 success=False,
@@ -207,7 +217,7 @@ class AdsExecutor:
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
 
-        before = {"status": campaign.status}
+        before = {"status": campaign.status, "daily_budget": str(campaign.daily_budget) if campaign.daily_budget else None}
         params: dict[str, Any] = {"access_token": access_token}
 
         if action.action_type == AIActionType.pause_campaign:
@@ -268,26 +278,19 @@ class AdsExecutor:
             )
 
         body = resp.json() if resp.content else {}
-        body = {k: v for k, v in body.items() if k not in {"access_token", "refresh_token"}}
-        if resp.status_code == 429:
-            return AdsExecutionResult(
-                success=False,
-                status="failed",
-                message="Meta rate limited the request",
-                error=resp.text[:300],
-                error_code="RATE_LIMITED",
-                platform_response={"status_code": resp.status_code, "body": body},
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-            )
+        body = {k: v for k, v in body.items() if k not in {"access_token", "refresh_token", "client_secret"}}
         if resp.status_code >= 400:
-            err = body.get("error") or {}
+            error_code, _category = classify_meta_graph_error(
+                status_code=resp.status_code, body=body if isinstance(body, dict) else {}, text=resp.text
+            )
+            err = body.get("error") if isinstance(body, dict) else {}
+            err = err if isinstance(err, dict) else {}
             return AdsExecutionResult(
                 success=False,
                 status="failed",
                 message=err.get("message") or resp.text[:300] or "Meta API error",
-                error=err.get("message") or "PLATFORM_API_ERROR",
-                error_code=f"HTTP_{resp.status_code}",
+                error=err.get("message") or error_code,
+                error_code=error_code,
                 platform_response={"status_code": resp.status_code, "body": body},
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc).isoformat(),
@@ -323,7 +326,7 @@ class AdsExecutor:
         return AdsExecutionResult(
             success=True,
             status="succeeded",
-            message="Meta confirmed the ads mutation",
+            message="Meta confirmed the ads mutation — post-action reconciliation still required",
             external_id=external_id,
             platform_response=body,
             before_state=before,

@@ -351,6 +351,14 @@ See [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
 - Audit: `canary.dry_run`, `canary.blocked`, `canary.execution_*`, `canary.post_verification_*`, `canary.reconciliation_required`
 - **Verified ≠ autonomous spend. Canary success ≠ unrestricted autonomy.**
 
+### Milestone 6 — Real Meta verification
+
+- `app/integrations/meta_oauth.py` — long-lived token exchange, ad-account discovery, `ensure_meta_access_token`
+- OAuth callback persists `act_*` + `ad_accounts` (not Graph user id as the primary account id)
+- `classify_meta_graph_error` maps Graph codes → CREDENTIALS_EXPIRED / AUTHORIZATION_ERROR / RATE_LIMITED / …
+- Automated tests: `tests/test_meta_m6_verification.py` (mocked Graph; no live credentials)
+- Real Meta canary remains manual — see [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md)
+
 ### Database
 
 No new Milestone 3 migration. Reuses `performance_recommendations`, `ai_actions`, `action_executions`, `autonomy_settings`, and audit events. Decision snapshots live in recommendation JSON.

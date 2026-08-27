@@ -240,3 +240,12 @@ Empty `CANARY_ALLOWED_*` allowlists deny all. Stale verification
 Confirm: `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION`.
 **Canary success ≠ unrestricted production autonomy.**
 Procedure: [PRODUCTION_CANARY.md](./PRODUCTION_CANARY.md).
+
+## Real Meta verification (Milestone 6)
+
+- Long-lived Meta token exchange + `ensure_meta_access_token` (`app/integrations/meta_oauth.py`)
+- OAuth callback discovers ad accounts (`act_*`) into `Integration.config`
+- Graph error classification via `classify_meta_graph_error`
+- Pause / resume / budget still via `AdsExecutor` + `AdsReconciler` only
+- Live execution defaults remain OFF; real Meta canary is manual
+- Docs: [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md)

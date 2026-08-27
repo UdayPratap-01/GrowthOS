@@ -156,8 +156,17 @@ async def clear_integration_secrets(db: AsyncSession, row: Integration) -> Integ
     row.secret_ref = None
     row.status = "not_connected"
     cfg = dict(row.config or {})
-    cfg.pop("account_label", None)
-    cfg.pop("external_account_id", None)
+    for key in (
+        "account_label",
+        "external_account_id",
+        "meta_user_id",
+        "ad_accounts",
+        "discovered_campaigns",
+        "last_verification",
+        "discovery",
+        "discovery_updated_at",
+    ):
+        cfg.pop(key, None)
     row.config = cfg
     await db.flush()
     await db.refresh(row)

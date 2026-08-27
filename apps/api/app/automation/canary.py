@@ -350,10 +350,20 @@ async def evaluate_canary_gate(
             if (not row) and client_id:
                 row = await get_integration_row(db, organization_id=organization_id, provider="meta", client_id=None)
             cfg_acct = str((row.config or {}).get("external_account_id") or "") if row else ""
-            candidates = {acct.lower(), cfg_acct.lower(), acct.replace("act_", "").lower(), cfg_acct.replace("act_", "").lower()}
+            cfg_accounts = []
+            if row:
+                for a in (row.config or {}).get("ad_accounts") or []:
+                    if isinstance(a, dict) and a.get("id"):
+                        cfg_accounts.append(str(a.get("id")))
+            candidates = {
+                acct.lower(),
+                cfg_acct.lower(),
+                acct.replace("act_", "").lower(),
+                cfg_acct.replace("act_", "").lower(),
+                *[c.lower() for c in cfg_accounts],
+                *[c.replace("act_", "").lower() for c in cfg_accounts],
+            }
             candidates.discard("")
-            ok = bool(candidates & accounts) or any(a in accounts for a in candidates)
-            # Also allow exact cfg match with act_ prefix variants
             expanded = set(accounts)
             for a in list(accounts):
                 if a.startswith("act_"):

@@ -147,10 +147,11 @@ def parse_leadgen_events(payload: Any) -> list[LeadgenEvent]:
 def page_ids_for(integration: Integration) -> set[str]:
     """Every Meta page identifier recorded on an integration at connect time."""
     config = integration.config or {}
-    candidates = {
-        str(config.get("page_id") or ""),
-        str(config.get("external_account_id") or ""),
-    }
+    candidates = {str(config.get("page_id") or "")}
+    # Ad accounts use act_* — they are not Facebook Pages and must not drive webhook routing.
+    ext = str(config.get("external_account_id") or "")
+    if ext and not ext.lower().startswith("act_"):
+        candidates.add(ext)
     for extra in config.get("page_ids") or []:
         candidates.add(str(extra))
     return {value for value in candidates if value}

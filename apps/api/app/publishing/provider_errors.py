@@ -31,6 +31,10 @@ CONFIRMED_FAILURE_CODES = frozenset(
         BUDGET_REQUIRED,
         EXECUTION_NOT_CONFIRMED,
         RATE_LIMITED,
+        "AUTHORIZATION_ERROR",
+        "VALIDATION_ERROR",
+        "CONFLICT",
+        PLATFORM_API_ERROR,
     }
 )
 
@@ -77,6 +81,43 @@ def is_confirmed_failure_code(code: str | None) -> bool:
     if code.startswith("HTTP_"):
         return True
     return code in CONFIRMED_FAILURE_CODES
+
+
+def classify_meta_graph_error(
+    *,
+    status_code: int,
+    body: dict | None = None,
+    text: str = "",
+) -> tuple[str, str]:
+    """
+    Map Meta Graph API errors to normalized (error_code, category).
+
+    Returns (AdsExecutor error_code, VerificationErrorCategory value).
+    Never echoes tokens from provider payloads.
+    """
+    err = (body or {}).get("error") if isinstance(body, dict) else None
+    err = err if isinstance(err, dict) else {}
+    code = err.get("code")
+    subcode = err.get("error_subcode")
+    msg = str(err.get("message") or text or "")[:240].lower()
+
+    if status_code == 429 or code == 4 or code == 17 or code == 32 or "rate limit" in msg:
+        return RATE_LIMITED, VerificationErrorCategory.rate_limit.value
+    if status_code == 401 or code in {190, 102} or "session has expired" in msg or "invalid oauth" in msg:
+        return CREDENTIALS_EXPIRED, VerificationErrorCategory.authentication.value
+    if status_code == 403 or code in {10, 200, 294} or "permission" in msg or "insufficient" in msg:
+        return "AUTHORIZATION_ERROR", VerificationErrorCategory.authorization.value
+    if status_code == 404 or code == 803 or "does not exist" in msg or "unsupported get request" in msg:
+        return TARGET_NOT_FOUND, VerificationErrorCategory.account_not_found.value
+    if status_code == 400 and ("validation" in msg or "invalid parameter" in msg or code == 100):
+        return "VALIDATION_ERROR", VerificationErrorCategory.api_error.value
+    if status_code == 409 or "conflict" in msg:
+        return "CONFLICT", VerificationErrorCategory.api_error.value
+    if status_code >= 500:
+        return PLATFORM_API_ERROR, VerificationErrorCategory.provider_unavailable.value
+    if status_code >= 400:
+        return f"HTTP_{status_code}", VerificationErrorCategory.api_error.value
+    return PLATFORM_API_ERROR, VerificationErrorCategory.unknown.value
 
 
 def reconciliation_blocks_retry(action) -> bool:

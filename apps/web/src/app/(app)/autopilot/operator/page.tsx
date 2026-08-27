@@ -273,6 +273,16 @@ export default function AutopilotOperatorHome() {
                   <p>Authentication: {auth}</p>
                   <p>Account: {p.account_hint || (last.account as { name?: string } | undefined)?.name || "—"}</p>
                   <p>Read access: {p.safe_for_read || last.safe_for_read ? "VERIFIED/READY" : "NOT_CHECKED"}</p>
+                  <p>
+                    Connection:{" "}
+                    {p.integration_connected
+                      ? p.status === "VERIFIED"
+                        ? "Verified"
+                        : "Connected"
+                      : p.credentials_configured
+                        ? "Not connected"
+                        : "Not configured"}
+                  </p>
                   <p>Capabilities: {Array.isArray(caps) && caps.length ? `${caps.length} reported` : "—"}</p>
                   <p>
                     Campaigns discovered:{" "}

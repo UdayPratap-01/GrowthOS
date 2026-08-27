@@ -130,8 +130,20 @@ class AdsReconciler:
             row = await get_integration_row(
                 self.db, organization_id=action.organization_id, provider="meta", client_id=None
             )
-        tokens = load_tokens(row) if row else None
-        access_token = (tokens or {}).get("access_token")
+        access_token = None
+        if row:
+            try:
+                from app.integrations.meta_oauth import ensure_meta_access_token
+
+                access_token = await ensure_meta_access_token(
+                    self.db,
+                    row,
+                    organization_id=action.organization_id,
+                    client_id=action.client_id,
+                )
+            except Exception:
+                tokens = load_tokens(row) or {}
+                access_token = tokens.get("access_token")
         if not access_token:
             return ReconciliationResult(
                 outcome=ReconciliationOutcome.unknown,

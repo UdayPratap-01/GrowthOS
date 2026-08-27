@@ -156,34 +156,56 @@ class MetaFamilyIntegration(MarketingIntegration):
             if token_resp.status_code >= 400:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Meta token exchange failed: {token_resp.text}",
+                    detail="Meta token exchange failed",
                 )
             token_data = token_resp.json()
             access_token = token_data.get("access_token")
             if not access_token:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meta did not return an access token")
 
+            # Prefer long-lived user token (~60d). Fall back to short-lived if exchange fails.
+            from app.integrations.meta_oauth import (
+                build_meta_connection_config,
+                discover_meta_ad_accounts,
+                exchange_for_long_lived_token,
+            )
+
+            long_lived = False
+            expires_in = token_data.get("expires_in")
+            try:
+                exchanged = await exchange_for_long_lived_token(access_token)
+                access_token = exchanged["access_token"]
+                expires_in = exchanged.get("expires_in", expires_in)
+                long_lived = True
+            except Exception:
+                long_lived = False
+
             me_resp = await client.get(f"{META_GRAPH}/me", params={"access_token": access_token, "fields": "id,name"})
             me = me_resp.json() if me_resp.status_code < 400 else {}
 
+            ad_accounts: list = []
+            if self.provider == "meta":
+                try:
+                    ad_accounts = await discover_meta_ad_accounts(access_token, http_client=client)
+                except Exception:
+                    ad_accounts = []
+
         org_id = UUID(payload["organization_id"])
         client_id = UUID(payload["client_id"]) if payload.get("client_id") else None
+        config = build_meta_connection_config(me=me, ad_accounts=ad_accounts, display_name=self.display_name)
         await upsert_integration(
             db,
             organization_id=org_id,
             provider=self.provider,
             client_id=client_id,
             status="connected",
-            config={
-                "account_label": me.get("name") or me.get("id") or self.display_name,
-                "external_account_id": me.get("id"),
-                "connected_at": datetime.now(timezone.utc).isoformat(),
-                "token_type": "meta_user",
-            },
+            config=config,
             token_payload={
                 "access_token": access_token,
                 "token_type": token_data.get("token_type", "bearer"),
-                "expires_in": token_data.get("expires_in"),
+                "expires_in": expires_in,
+                "obtained_at": datetime.now(timezone.utc).isoformat(),
+                "long_lived": long_lived,
                 "provider": self.provider,
             },
         )
@@ -197,16 +219,27 @@ class MetaFamilyIntegration(MarketingIntegration):
                     name=me.get("name") or self.display_name,
                     connection_status=AccountConnectionStatus.connected,
                     encrypted_credentials_ref=None,  # tokens live on Integration.secret_ref
-                    meta={"phase": 3},
+                    meta={"phase": 3, "ad_account_ids": [a.get("id") for a in ad_accounts[:20]]},
                     last_synced_at=None,
                 )
             )
             await db.flush()
+        from app.observability import events
+
+        events.integration_sync(
+            provider=self.provider,
+            organization_id=org_id,
+            success=True,
+            records=len(ad_accounts),
+            message="oauth_connected",
+        )
         return {
             "provider": self.provider,
             "organization_id": str(org_id),
             "client_id": str(client_id) if client_id else None,
-            "account_label": me.get("name"),
+            "account_label": config.get("account_label"),
+            "ad_account_count": len(ad_accounts),
+            "long_lived_token": long_lived,
         }
 
     async def disconnect(self, organization_id: UUID, client_id: UUID | None = None) -> ConnectionStatus:
@@ -241,7 +274,42 @@ class MetaFamilyIntegration(MarketingIntegration):
             )
 
         try:
-            records = await self._sync_live(db, organization_id, client_id, tokens["access_token"])
+            from app.integrations.meta_oauth import ensure_meta_access_token
+
+            access = await ensure_meta_access_token(
+                db, row, organization_id=organization_id, client_id=client_id
+            )
+        except Exception:
+            access = tokens["access_token"]
+
+        try:
+            records = await self._sync_live(db, organization_id, client_id, access)
+            # Refresh ad-account discovery into config for Meta Ads.
+            if self.provider == "meta":
+                try:
+                    from app.integrations.meta_oauth import discover_meta_ad_accounts
+
+                    ad_accounts = await discover_meta_ad_accounts(access)
+                    cfg = dict(row.config or {})
+                    if ad_accounts:
+                        cfg["ad_accounts"] = [
+                            {
+                                "id": a.get("id"),
+                                "account_id": a.get("account_id"),
+                                "name": a.get("name"),
+                                "status": a.get("status"),
+                                "currency": a.get("currency"),
+                            }
+                            for a in ad_accounts[:50]
+                        ]
+                        if not cfg.get("meta_user_id"):
+                            cfg["meta_user_id"] = cfg.get("external_account_id")
+                        cfg["external_account_id"] = ad_accounts[0].get("id") or cfg.get("external_account_id")
+                        cfg["account_label"] = ad_accounts[0].get("name") or cfg.get("account_label")
+                        row.config = cfg
+                        await db.flush()
+                except Exception:
+                    pass
             await mark_sync(db, row, status="connected", records_synced=records)
             return SyncResult(
                 provider=self.provider,
@@ -251,13 +319,13 @@ class MetaFamilyIntegration(MarketingIntegration):
                 message=f"Synced {records} live records from {self.display_name}.",
             )
         except Exception as exc:
-            await mark_sync(db, row, status="sync_error", error=str(exc))
+            await mark_sync(db, row, status="sync_error", error=str(exc)[:300])
             return SyncResult(
                 provider=self.provider,
                 success=False,
                 status=IntegrationConnectionStatus.sync_error,
                 message="Sync failed against Meta Graph API.",
-                errors=[str(exc)],
+                errors=[type(exc).__name__],
             )
 
     async def _sync_live(

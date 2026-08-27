@@ -426,6 +426,32 @@ async def _finish_verification(
     if row is not None:
         cfg = dict(row.config or {})
         cfg["last_verification"] = sanitize_platform_response(report.as_dict())
+        # Persist discovered Meta ad accounts for canary allowlists (no secrets).
+        if report.provider == "meta" and report.status == "VERIFIED" and report.canary_resources:
+            resources = report.canary_resources or {}
+            ad = resources.get("ad_account") or report.account or {}
+            camps = resources.get("campaigns") or []
+            if ad.get("id"):
+                cfg["external_account_id"] = ad.get("id")
+                existing = list(cfg.get("ad_accounts") or [])
+                ids = {str(a.get("id")) for a in existing if isinstance(a, dict)}
+                if str(ad.get("id")) not in ids:
+                    existing.insert(
+                        0,
+                        {
+                            "id": ad.get("id"),
+                            "name": ad.get("name"),
+                            "status": ad.get("status"),
+                        },
+                    )
+                cfg["ad_accounts"] = existing[:50]
+            if camps:
+                cfg["discovered_campaigns"] = [
+                    {"id": c.get("id"), "name": c.get("name"), "status": c.get("status")}
+                    for c in camps[:25]
+                    if isinstance(c, dict)
+                ]
+            cfg["discovery_updated_at"] = report.checked_at
         row.config = cfg
         await db.flush()
 
@@ -453,6 +479,15 @@ async def _verify_meta_readonly(
         row = await get_integration_row(db, organization_id=organization_id, provider="meta", client_id=None)
     tokens = load_tokens(row) if row else None
     access = (tokens or {}).get("access_token")
+    if row and access:
+        try:
+            from app.integrations.meta_oauth import ensure_meta_access_token
+
+            access = await ensure_meta_access_token(
+                db, row, organization_id=organization_id, client_id=client_id
+            )
+        except Exception:
+            pass
     if not access:
         report.authentication = {"status": "AUTHENTICATION_FAILED"}
         report.error_category = VerificationErrorCategory.authentication.value
@@ -556,9 +591,39 @@ async def _verify_meta_readonly(
         report.checks.extend([s.as_dict() for s in report.steps])
         return report
 
+    cfg = (row.config or {}) if row else {}
+    configured_ext = cfg.get("external_account_id")
+    meta_user_id = cfg.get("meta_user_id")
+    known_ids = {
+        str(a.get("id"))
+        for a in (cfg.get("ad_accounts") or [])
+        if isinstance(a, dict) and a.get("id")
+    }
+    accessible_ids: set[str] = set()
+    for a in accounts:
+        if not isinstance(a, dict):
+            continue
+        accessible_ids.add(str(a.get("id") or ""))
+        if a.get("account_id") is not None:
+            accessible_ids.add(str(a.get("account_id")))
+            accessible_ids.add(f"act_{a.get('account_id')}")
+    accessible_ids.discard("")
+
+    # Prefer the configured ad account when it is still accessible; else first accessible.
+    # Legacy OAuth stored Graph user id as external_account_id — do not fail hard on that.
     account = accounts[0]
-    configured_ext = (row.config or {}).get("external_account_id") if row else None
-    if configured_ext and str(configured_ext) not in {str(account.get("id")), str(account.get("account_id")), f"act_{account.get('account_id')}"}:
+    if configured_ext and str(configured_ext) in accessible_ids:
+        for a in accounts:
+            if not isinstance(a, dict):
+                continue
+            ids = {str(a.get("id") or ""), str(a.get("account_id") or ""), f"act_{a.get('account_id')}"}
+            if str(configured_ext) in ids:
+                account = a
+                break
+    elif configured_ext and str(configured_ext) == str(meta_user_id or ""):
+        # Legacy user-id identity — ad accounts are still readable; proceed with first.
+        pass
+    elif configured_ext and known_ids and str(configured_ext) not in accessible_ids and str(configured_ext) not in known_ids:
         report.steps.append(
             VerificationStepResult(
                 "account_identity",
@@ -570,6 +635,23 @@ async def _verify_meta_readonly(
         report.error_category = VerificationErrorCategory.account_access.value
         report.checks.extend([s.as_dict() for s in report.steps])
         return report
+    elif configured_ext and str(configured_ext) not in accessible_ids and not meta_user_id and not known_ids:
+        # Strict mismatch when we have no legacy/user context
+        if not str(configured_ext).startswith("act_") and configured_ext not in accessible_ids:
+            # Likely legacy user id without meta_user_id field — allow discovery
+            pass
+        elif str(configured_ext) not in accessible_ids:
+            report.steps.append(
+                VerificationStepResult(
+                    "account_identity",
+                    False,
+                    "Configured external_account_id does not match accessible accounts",
+                    category="ACCOUNT_ACCESS",
+                )
+            )
+            report.error_category = VerificationErrorCategory.account_access.value
+            report.checks.extend([s.as_dict() for s in report.steps])
+            return report
 
     report.account = {
         "id": account.get("id") or account.get("account_id"),

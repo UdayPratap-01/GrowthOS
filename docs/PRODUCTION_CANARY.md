@@ -127,6 +127,39 @@ Blocks **new** live canary mutations. Does not delete recommendations or rewrite
 9. Confirm post-verification; if UNKNOWN, use existing reconciliation — **do not auto-retry**.
 10. Leave autonomous latches OFF unless a later milestone explicitly authorizes them.
 
+## Real Meta canary checklist (M6)
+
+Use a **dedicated low-risk Meta ad account** and a **single test campaign**. Stop on any failure.
+
+```text
+1. Meta App: META_APP_ID / META_APP_SECRET + redirect URI allowlisted
+2. Integrations UI → Connect Meta (OAuth) → long-lived token stored encrypted
+3. Confirm config.external_account_id is act_* (not Graph user id)
+4. Read-only verify → VERIFIED + canary_resources campaigns listed
+5. Create/sync GrowthOS Campaign row with external_id = Meta campaign id
+6. Allowlists:
+   CANARY_ENABLED=true
+   CANARY_ALLOWED_ORG_IDS=<org>
+   CANARY_ALLOWED_PROVIDERS=meta
+   CANARY_ALLOWED_META_AD_ACCOUNTS=act_...
+   CANARY_ALLOWED_META_CAMPAIGNS=<campaign_id>
+   CANARY_ALLOWED_ACTIONS=pause_campaign,resume_campaign
+   CANARY_ALLOWED_ENVIRONMENTS=<this env>
+7. AUTONOMOUS_KILL_SWITCH=false (and keep AUTONOMOUS_EXECUTION_ENABLED=false)
+8. Dry-run pause → ALLOWED
+9. Execute pause → post-verify PAUSED
+10. Dry-run resume → execute → post-verify ACTIVE
+11. Optional: controlled budget update (tiny delta) → reconcile daily_budget
+12. If UNKNOWN/timeout → reconcile only; never blind retry
+```
+
+Confirm phrases:
+
+- Read-only: `I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION`
+- Live canary: `I_CONFIRM_CANARY_LIVE_PROVIDER_EXECUTION`
+
+**Canary success ≠ unrestricted production autonomy.**
+
 ## Rollback
 
 1. Set `AUTONOMOUS_KILL_SWITCH=true` and/or `CANARY_ENABLED=false`.
@@ -143,9 +176,10 @@ Blocks **new** live canary mutations. Does not delete recommendations or rewrite
 | BLOCKED_KILL_SWITCH | Kill switch on |
 | BLOCKED_RECONCILIATION | Resolve UNKNOWN first |
 | Dry-run OK, execute blocked | Confirm phrase / kill switch flipped between calls |
+| Account allowlist miss | Prefer `act_*` from OAuth discovery / verify snapshot |
 
 ## Related docs
 
-- [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md) — Phase 1 read-only
+- [PROVIDER_VERIFICATION.md](./PROVIDER_VERIFICATION.md) — Phase 1 read-only + Meta OAuth
 - [AUTONOMOUS_MARKETING_ENGINE.md](./AUTONOMOUS_MARKETING_ENGINE.md)
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
