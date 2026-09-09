@@ -8,9 +8,17 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { api, errorMessage } from "@/lib/api";
-import { CanaryStatus, OperatorStatus } from "@/lib/operator";
+import {
+  CanaryStatus,
+  CapabilityItem,
+  OperatorStatus,
+  ProviderReadiness,
+  humanStage,
+  readinessTone,
+} from "@/lib/operator";
 
 const links = [
+  { href: "/integrations", label: "Integrations (OAuth)" },
   { href: "/autopilot/recommendations", label: "Recommendations" },
   { href: "/autopilot/actions", label: "AI Actions" },
   { href: "/autopilot/reconciliation", label: "Reconciliation" },
@@ -30,6 +38,8 @@ type ProviderItem = {
   safe_for_read: boolean;
   safe_for_mutation: boolean;
   last_verification?: Record<string, unknown> | null;
+  capability_matrix?: CapabilityItem[];
+  readiness?: ProviderReadiness;
   mutation?: string;
 };
 
@@ -50,6 +60,13 @@ function verificationAgeHours(checkedAt: string | null | undefined): string {
   if (Number.isNaN(t)) return "—";
   const hours = (Date.now() - t) / 3_600_000;
   return `${hours.toFixed(1)}h`;
+}
+
+function campaignLabel(c: { id?: string; name?: string; status?: string }): string {
+  const id = c.id || "—";
+  const name = c.name ? ` ${c.name}` : "";
+  const st = c.status ? ` [${c.status}]` : "";
+  return `${id}${name}${st}`;
 }
 
 export default function AutopilotOperatorHome() {
@@ -190,6 +207,9 @@ export default function AutopilotOperatorHome() {
   const killActive = status.autonomous_kill_switch;
   const canaryReady = canary?.readiness === "READY" && !killActive && Boolean(canary?.canary_enabled);
   const executeDisabled = !canaryReady || busy !== null || !campaignId.trim();
+  const prod = status.production_readiness;
+  const selectedProvider = providers.find((p) => p.provider === providerSel);
+  const discoveredCampaigns = selectedProvider?.readiness?.campaigns || [];
 
   return (
     <div className="space-y-6 animate-rise">
@@ -200,6 +220,24 @@ export default function AutopilotOperatorHome() {
           server.
         </p>
       </div>
+
+      {prod ? (
+        <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel-soft)] px-4 py-3 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <Badge tone="success">{prod.banners.code}</Badge>
+            <Badge tone={prod.real_provider_verification_pending ? "warning" : "success"}>
+              {prod.banners.providers}
+            </Badge>
+            <Badge tone="warning">{prod.banners.deployment}</Badge>
+            {prod.demo_mode ? <Badge tone="demo">DEMO MODE ON</Badge> : <Badge>LIVE PATH DEFAULTS</Badge>}
+          </div>
+          <p className="text-[var(--muted)]">
+            Meta live verification: {prod.meta.live_verification} ({humanStage(prod.meta.stage)}). Google live
+            verification: {prod.google.live_verification} ({humanStage(prod.google.stage)}). Autonomous latches
+            remain OFF until controlled canaries pass — do not treat CONFIGURED as VERIFIED.
+          </p>
+        </div>
+      ) : null}
 
       {killActive ? (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-700 dark:text-red-300">
@@ -253,6 +291,57 @@ export default function AutopilotOperatorHome() {
 
       <Card>
         <CardHeader
+          title="META / GOOGLE readiness"
+          subtitle="Connect → verify (read-only) → canary. Never claim verified before a real provider check."
+        />
+        <div className="grid gap-3 md:grid-cols-2">
+          {(["meta", "google_ads"] as const).map((key) => {
+            const p = providers.find((x) => x.provider === key);
+            const r =
+              p?.readiness ||
+              status.provider_readiness?.[key] ||
+              ({ stage: "NOT_CONFIGURED" } as ProviderReadiness);
+            const canaryRow = canary?.providers?.find((x) => x.provider === key || (key === "meta" && x.provider === "meta"));
+            return (
+              <div key={key} className="rounded-lg border border-[var(--line)] p-4 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium uppercase">{key === "google_ads" ? "GOOGLE" : "META"}</span>
+                  <Badge tone={readinessTone(r.stage)}>{humanStage(r.stage)}</Badge>
+                </div>
+                <div className="mt-3 space-y-1 text-[var(--muted)]">
+                  <p>Credentials: {r.credentials_configured || p?.credentials_configured ? "Configured" : "Missing"}</p>
+                  <p>OAuth: {r.connected || p?.integration_connected ? "Connected" : "Not connected"}</p>
+                  <p>Verification: {humanStage(r.verification_status || "NOT RUN")}</p>
+                  <p>Last verification: {String(r.verification_checked_at || "—")}</p>
+                  <p>Age: {verificationAgeHours(r.verification_checked_at || undefined)}</p>
+                  <p>
+                    Account:{" "}
+                    {r.account?.name ||
+                      r.account?.id ||
+                      p?.account_hint ||
+                      canaryRow?.account_hint ||
+                      "—"}
+                  </p>
+                  <p>
+                    Canary:{" "}
+                    {canary?.canary_enabled
+                      ? canary.readiness === "READY" && r.stage === "VERIFIED"
+                        ? "Ready (org gates)"
+                        : "Blocked / incomplete"
+                      : "Disabled"}
+                  </p>
+                  {r.failure_reason ? (
+                    <p className="text-rose-700 dark:text-rose-300">Failure: {r.failure_reason}</p>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
           title="Provider verification (read-only)"
           subtitle="Verified ≠ autonomous spend enabled. Refresh before live canary."
         />
@@ -260,13 +349,23 @@ export default function AutopilotOperatorHome() {
           {providers.map((p) => {
             const last = p.last_verification || {};
             const auth = (last.authentication as { status?: string } | undefined)?.status || "NOT_CHECKED";
-            const caps = (last.capabilities as unknown[]) || [];
-            const resources = (last.canary_resources as { campaigns?: unknown[] } | undefined) || {};
+            const caps = p.capability_matrix || (last.capabilities as CapabilityItem[]) || [];
+            const resources = (last.canary_resources as { campaigns?: Array<{ id?: string; name?: string; status?: string }> } | undefined) || {};
+            const campaigns = p.readiness?.campaigns?.length
+              ? p.readiness.campaigns
+              : Array.isArray(resources.campaigns)
+                ? resources.campaigns
+                : [];
+            const stage = p.readiness?.stage || p.status;
+            const failure =
+              p.readiness?.failure_reason ||
+              (last.error_category as string | undefined) ||
+              (last.skipped_reason as string | undefined);
             return (
               <div key={p.provider} className="rounded-lg border border-[var(--line)] p-4 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium uppercase">{p.provider}</span>
-                  <Badge>{p.status}</Badge>
+                  <Badge tone={readinessTone(stage)}>{humanStage(stage)}</Badge>
                 </div>
                 <div className="mt-3 space-y-1 text-[var(--muted)]">
                   <p>Configuration: {p.credentials_configured ? "CONFIGURED" : "NOT_CONFIGURED"}</p>
@@ -276,20 +375,39 @@ export default function AutopilotOperatorHome() {
                   <p>
                     Connection:{" "}
                     {p.integration_connected
-                      ? p.status === "VERIFIED"
+                      ? p.status === "VERIFIED" || stage === "VERIFIED"
                         ? "Verified"
                         : "Connected"
                       : p.credentials_configured
                         ? "Not connected"
                         : "Not configured"}
                   </p>
-                  <p>Capabilities: {Array.isArray(caps) && caps.length ? `${caps.length} reported` : "—"}</p>
-                  <p>
-                    Campaigns discovered:{" "}
-                    {Array.isArray(resources.campaigns) ? resources.campaigns.length : "—"}
-                  </p>
-                  <p>Last verification: {String(last.checked_at || "—")}</p>
-                  <p>Age: {verificationAgeHours(String(last.checked_at || ""))}</p>
+                  <p>Last verification: {String(last.checked_at || p.readiness?.verification_checked_at || "—")}</p>
+                  <p>Age: {verificationAgeHours(String(last.checked_at || p.readiness?.verification_checked_at || ""))}</p>
+                  {failure ? <p className="text-rose-700 dark:text-rose-300">Failure reason: {failure}</p> : null}
+                  <div className="pt-2">
+                    <p className="font-medium text-[var(--ink)]">Capabilities</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {(caps.length ? caps : [{ operation: "—", status: "UNKNOWN" }]).map((c) => (
+                        <li key={`${p.provider}-${c.operation}`}>
+                          {c.operation}: <span className="uppercase">{c.status}</span>
+                          {c.operation === "update_budget" && p.provider === "google_ads" ? " (deferred)" : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="pt-2">
+                    <p className="font-medium text-[var(--ink)]">Campaigns discovered</p>
+                    {campaigns.length ? (
+                      <ul className="mt-1 max-h-28 overflow-y-auto space-y-0.5 font-mono text-xs">
+                        {campaigns.slice(0, 12).map((c, idx) => (
+                          <li key={`${c.id || idx}`}>{campaignLabel(c)}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>—</p>
+                    )}
+                  </div>
                 </div>
                 <Button
                   className="mt-3"
@@ -313,10 +431,30 @@ export default function AutopilotOperatorHome() {
         {canary ? (
           <div className="space-y-4 text-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={canary.readiness === "READY" ? "default" : "danger"}>{canary.readiness}</Badge>
+              <Badge tone={canary.readiness === "READY" ? "success" : "danger"}>{canary.readiness}</Badge>
               <Badge>{canary.canary_enabled ? "CANARY ON" : "CANARY OFF"}</Badge>
               <span className="text-[var(--muted)]">env={canary.environment}</span>
             </div>
+            {canary.notes?.length ? (
+              <ul className="list-disc space-y-1 pl-5 text-[var(--muted)]">
+                {canary.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            ) : null}
+            {canary.providers?.length ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {canary.providers.map((cp) => (
+                  <div key={cp.provider} className="rounded-md border border-[var(--line)] p-3 text-[var(--muted)]">
+                    <p className="font-medium uppercase text-[var(--ink)]">{cp.provider}</p>
+                    <p>Connected: {String(cp.connected)}</p>
+                    <p>Verification: {cp.verification_status || "—"}</p>
+                    <p>Checked: {cp.verification_checked_at || "—"}</p>
+                    <p>Account: {cp.account_hint || "—"}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="grid gap-2 md:grid-cols-2 text-[var(--muted)]">
               <p>Providers allowlist: {canary.allowlists.providers || "(empty)"}</p>
               <p>Actions allowlist: {canary.allowlists.actions || "(empty)"}</p>
@@ -366,6 +504,18 @@ export default function AutopilotOperatorHome() {
                 />
               </label>
             </div>
+            {discoveredCampaigns.length ? (
+              <div className="text-xs text-[var(--muted)]">
+                <p className="mb-1 font-medium text-[var(--ink)]">
+                  Provider campaign ids (for allowlists — canary still needs GrowthOS UUID):
+                </p>
+                <ul className="max-h-24 overflow-y-auto font-mono">
+                  {discoveredCampaigns.slice(0, 8).map((c, idx) => (
+                    <li key={`${c.id || idx}`}>{campaignLabel(c)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={busy !== null} onClick={dryRun}>
                 Dry Run
@@ -383,7 +533,7 @@ export default function AutopilotOperatorHome() {
             {dryResult ? <p className="text-[var(--muted)]">{dryResult}</p> : null}
             <p className="text-xs text-[var(--muted)]">
               Confirm phrase (server-validated): {canary.confirm_phrase}. Provider verified ≠ autonomous spend.
-              Canary success ≠ unrestricted autonomy.
+              Canary success ≠ unrestricted autonomy. Google budget mutation is UNSUPPORTED.
             </p>
             {history.length ? (
               <div className="overflow-x-auto">

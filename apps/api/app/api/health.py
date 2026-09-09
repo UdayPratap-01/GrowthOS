@@ -201,6 +201,8 @@ def _operational_status(settings) -> dict:
     )
     # Provider verification health is configuration presence only — never implies
     # autonomous execution. Missing credentials in demo/dev is NOT_CONFIGURED, not FAILED.
+    # CONFIGURED means app credentials are present — never implies live OAuth
+    # verification or canary success. Live VERIFIED is org-scoped (operator APIs).
     meta_verify = "NOT_CONFIGURED" if not meta_cfg else "CONFIGURED"
     google_verify = "NOT_CONFIGURED" if not google_cfg else "CONFIGURED"
     return {
@@ -230,5 +232,26 @@ def _operational_status(settings) -> dict:
                 else ("BLOCKED" if settings.autonomous_kill_switch else "HEALTHY")
             )
         ),
-        "note": "Provider CONFIGURED/VERIFIED does not enable autonomous spend; canary success ≠ unrestricted autonomy",
+        "production_readiness": {
+            "code": "CODE READY",
+            "providers": (
+                "REAL PROVIDER VERIFICATION PENDING"
+                if not (meta_cfg and google_cfg)
+                else "CREDENTIALS CONFIGURED — LIVE VERIFICATION STILL OPERATOR-OWNED"
+            ),
+            "deployment": "PRODUCTION DEPLOYMENT PENDING",
+            "demo_mode": bool(settings.demo_mode),
+            "live_mutations_off": not (
+                settings.autonomous_execution_enabled
+                or settings.canary_enabled
+                or settings.optimization_enabled
+                or settings.meta_autonomous_enabled
+                or settings.google_autonomous_enabled
+            ),
+        },
+        "note": (
+            "meta_verification/google_verification = app credential presence only "
+            "(CONFIGURED ≠ VERIFIED). Live verification is org-scoped via operator APIs. "
+            "Canary success ≠ unrestricted autonomy."
+        ),
     }

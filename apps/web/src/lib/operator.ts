@@ -1,5 +1,38 @@
 /** Shared operator UI helpers. */
 
+export type ProviderReadiness = {
+  stage: string;
+  credentials_configured: boolean;
+  connected: boolean;
+  verification_status?: string | null;
+  verification_checked_at?: string | null;
+  verification_age_hours?: number | null;
+  verification_stale?: boolean;
+  failure_reason?: string | null;
+  live_provider_verification?: string;
+  account?: { id?: string; name?: string; [key: string]: unknown } | null;
+  campaigns?: Array<{ id?: string; name?: string; status?: string; [key: string]: unknown }>;
+  note?: string;
+};
+
+export type ProductionReadiness = {
+  code_ready: boolean;
+  real_provider_verification_pending: boolean;
+  production_deployment_pending: boolean;
+  demo_mode: boolean;
+  live_mutations_default_off: boolean;
+  banners: { code: string; providers: string; deployment: string };
+  meta: { credentials_configured: boolean; stage: string; live_verification: string };
+  google: { credentials_configured: boolean; stage: string; live_verification: string };
+  never_enable_before_launch?: string[];
+};
+
+export type CapabilityItem = {
+  operation: string;
+  status: string;
+  message?: string;
+};
+
 export type OperatorStatus = {
   optimization_enabled: boolean;
   autonomous_execution_enabled: boolean;
@@ -11,6 +44,8 @@ export type OperatorStatus = {
     string,
     { connected: boolean; credentials_configured: boolean; autonomous_enabled: boolean; status: string }
   >;
+  provider_readiness?: Record<string, ProviderReadiness>;
+  production_readiness?: ProductionReadiness;
   safety: Record<string, unknown>;
   usage: { closed_loop_actions_today: number; max_actions_per_day: number };
   kill_switch: { enabled: boolean; effect: string };
@@ -24,6 +59,30 @@ export type OperatorStatus = {
     note: string;
   };
 };
+
+export function readinessTone(stage: string | undefined): "default" | "success" | "warning" | "danger" | "demo" {
+  switch ((stage || "").toUpperCase()) {
+    case "VERIFIED":
+    case "CANARY_READY":
+      return "success";
+    case "CONNECTED":
+    case "VERIFICATION_REQUIRED":
+      return "warning";
+    case "VERIFICATION_FAILED":
+    case "CANARY_BLOCKED":
+    case "NOT_CONNECTED":
+    case "NOT_CONFIGURED":
+      return "danger";
+    case "DEMO":
+      return "demo";
+    default:
+      return "default";
+  }
+}
+
+export function humanStage(stage: string | undefined): string {
+  return (stage || "UNKNOWN").replaceAll("_", " ");
+}
 
 export type CanaryStatus = {
   canary_enabled: boolean;

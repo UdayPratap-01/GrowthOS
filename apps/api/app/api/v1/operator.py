@@ -76,8 +76,11 @@ async def list_provider_preflight(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Sanitized preflight + last verification for Meta and Google Ads."""
+    from app.publishing.capabilities import google_ads_capabilities, meta_ads_capabilities
     from app.publishing.provider_preflight import run_provider_preflight
+    from app.publishing.readiness import derive_provider_readiness_stage
 
+    cfg = app_settings()
     items = []
     for provider in ("meta", "google_ads"):
         pre = await run_provider_preflight(
@@ -91,19 +94,42 @@ async def list_provider_preflight(
                 db, organization_id=auth.organization_id, provider=provider, client_id=None
             )
         last = (row.config or {}).get("last_verification") if row else None
+        if provider == "meta":
+            caps = meta_ads_capabilities(
+                connected=pre.integration_connected,
+                credentials_configured=pre.credentials_configured,
+            ).as_dict()["capabilities"]
+        else:
+            caps = google_ads_capabilities(
+                connected=pre.integration_connected,
+                credentials_configured=pre.credentials_configured,
+            ).as_dict()["capabilities"]
+        readiness = derive_provider_readiness_stage(
+            credentials_configured=pre.credentials_configured,
+            integration_connected=pre.integration_connected,
+            demo_mode=pre.demo_mode,
+            last_verification=last if isinstance(last, dict) else None,
+            canary_provider_ready=None,
+            canary_enabled=cfg.canary_enabled,
+            kill_switch=cfg.autonomous_kill_switch,
+            max_age_hours=float(cfg.provider_verification_max_age_hours or 24),
+        )
         items.append(
             {
                 **pre.as_dict(),
                 "last_verification": last,
-                "mutation": "DISABLED_IN_PHASE_1",
+                "capability_matrix": caps,
+                "readiness": readiness,
+                "mutation": "DISABLED_UNTIL_CANARY",
             }
         )
     return {
         "items": items,
         "notes": [
             "PROVIDER VERIFIED does not mean autonomous spend is enabled.",
-            "Phase 1 verification is read-only — no campaigns, ads, budgets, or spend are changed.",
+            "Read-only verification — no campaigns, ads, budgets, or spend are changed.",
             "Confirm phrase for live verify: I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION",
+            "Google Ads update_budget remains UNSUPPORTED in this release.",
         ],
     }
 
@@ -250,6 +276,55 @@ async def operator_status(
         or 0
     )
 
+    from app.publishing.readiness import (
+        derive_provider_readiness_stage,
+        production_readiness_summary,
+    )
+
+    meta_row = await get_integration_row(
+        db, organization_id=auth.organization_id, provider="meta", client_id=client_id
+    )
+    google_row = await get_integration_row(
+        db, organization_id=auth.organization_id, provider="google_ads", client_id=client_id
+    )
+    meta_last = (meta_row.config or {}).get("last_verification") if meta_row else None
+    google_last = (google_row.config or {}).get("last_verification") if google_row else None
+    meta_ready = derive_provider_readiness_stage(
+        credentials_configured=bool(cfg.meta_app_id and cfg.meta_app_secret),
+        integration_connected=bool(providers.get("meta", {}).get("connected")),
+        demo_mode=cfg.demo_mode,
+        last_verification=meta_last if isinstance(meta_last, dict) else None,
+        canary_enabled=cfg.canary_enabled,
+        kill_switch=cfg.autonomous_kill_switch,
+        max_age_hours=float(cfg.provider_verification_max_age_hours or 24),
+    )
+    google_ready = derive_provider_readiness_stage(
+        credentials_configured=bool(
+            cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token
+        ),
+        integration_connected=bool(providers.get("google_ads", {}).get("connected")),
+        demo_mode=cfg.demo_mode,
+        last_verification=google_last if isinstance(google_last, dict) else None,
+        canary_enabled=cfg.canary_enabled,
+        kill_switch=cfg.autonomous_kill_switch,
+        max_age_hours=float(cfg.provider_verification_max_age_hours or 24),
+    )
+    readiness = production_readiness_summary(
+        meta_credentials=bool(cfg.meta_app_id and cfg.meta_app_secret),
+        google_credentials=bool(
+            cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token
+        ),
+        meta_stage=meta_ready["stage"],
+        google_stage=google_ready["stage"],
+        autonomous_execution_enabled=cfg.autonomous_execution_enabled,
+        canary_enabled=cfg.canary_enabled,
+        optimization_enabled=cfg.optimization_enabled,
+        kill_switch=cfg.autonomous_kill_switch,
+        demo_mode=cfg.demo_mode,
+    )
+    readiness["latches"]["meta_autonomous"] = cfg.meta_autonomous_enabled
+    readiness["latches"]["google_autonomous"] = cfg.google_autonomous_enabled
+
     return {
         "optimization_enabled": cfg.optimization_enabled,
         "autonomous_execution_enabled": cfg.autonomous_execution_enabled,
@@ -258,6 +333,8 @@ async def operator_status(
         "autonomy_mode": settings.autonomy_mode.value,
         "automation_enabled": settings.automation_enabled,
         "providers": providers,
+        "provider_readiness": {"meta": meta_ready, "google_ads": google_ready},
+        "production_readiness": readiness,
         "safety": {
             "max_budget_increase_pct": float(settings.maximum_budget_increase_percentage or 0),
             "max_budget_decrease_pct": float(settings.maximum_budget_decrease_percentage or 0),

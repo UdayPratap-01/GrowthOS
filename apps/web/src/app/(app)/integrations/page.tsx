@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
@@ -150,6 +151,22 @@ function IntegrationsInner() {
         </Card>
       ) : null}
       {error ? <EmptyState title="Integration error" description={error} /> : null}
+
+      <Card>
+        <CardHeader
+          title="Next: provider verification"
+          subtitle="OAuth Connected ≠ Verified. Read-only verification and controlled canary live on Operator."
+        />
+        <p className="text-sm text-[var(--muted)]">
+          After Meta or Google Ads show Connected, open{" "}
+          <Link className="underline text-[var(--accent-ink)]" href="/autopilot/operator">
+            Operator control
+          </Link>{" "}
+          to run read-only verification. Live canary stays OFF until allowlists and confirmation phrases are set.
+          Status remains <strong>REAL PROVIDER VERIFICATION PENDING</strong> until those checks succeed against real
+          credentials.
+        </p>
+      </Card>
 
       <Card>
         <CardHeader

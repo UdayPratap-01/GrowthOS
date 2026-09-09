@@ -15,6 +15,9 @@ See:
 - [`docs/AUTONOMOUS_MARKETING_IMPLEMENTATION_REPORT.md`](docs/AUTONOMOUS_MARKETING_IMPLEMENTATION_REPORT.md)
 - [`docs/AI_CREATIVE_ENGINE.md`](docs/AI_CREATIVE_ENGINE.md) — AI campaign & creative generation (P2-A)
 - [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
+- [`docs/FINAL_PRODUCTION_READINESS.md`](docs/FINAL_PRODUCTION_READINESS.md) — M5–M8 launch gates (credentials / hosting)
+- [`docs/PROVIDER_VERIFICATION.md`](docs/PROVIDER_VERIFICATION.md) — Meta/Google read-only verification
+- [`docs/PRODUCTION_CANARY.md`](docs/PRODUCTION_CANARY.md) — controlled live canary
 
 ```
 apps/
