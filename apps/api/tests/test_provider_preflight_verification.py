@@ -243,7 +243,122 @@ async def test_meta_readonly_verification_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_meta_auth_failure(monkeypatch):
+async def test_meta_readonly_discovers_campaigns_on_non_primary_ad_account(monkeypatch):
+    """Stale external_account_id must not hide campaigns on another accessible act_*."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "meta_app_id", "app")
+    monkeypatch.setattr(settings, "meta_app_secret", "secret")
+    org_id, client_id, user_id, _ = await _seed_org(connect_meta=True)
+    http = FakeHttp(
+        {
+            "/me/adaccounts": FakeResp(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "act_1425213246194388",
+                            "account_id": "1425213246194388",
+                            "name": "GrowthOS Test Ads",
+                            "currency": "USD",
+                            "timezone_name": "UTC",
+                            "account_status": 1,
+                        },
+                        {
+                            "id": "act_111",
+                            "account_id": "111",
+                            "name": "Personal",
+                            "currency": "USD",
+                            "timezone_name": "UTC",
+                            "account_status": 1,
+                        },
+                    ]
+                },
+            ),
+            "/me": FakeResp(200, {"id": "u1", "name": "User"}),
+            # Longer path keys win FakeHttp matching — empty on stale primary, campaigns on test act.
+            "act_111/campaigns": FakeResp(200, {"data": []}),
+            "act_1425213246194388/campaigns": FakeResp(
+                200,
+                {"data": [{"id": "120249385449450480", "name": "GrowthOS M6 Test Campaign", "effective_status": "PAUSED"}]},
+            ),
+        }
+    )
+    async with AsyncSessionLocal() as db:
+        report = await verify_provider_readonly(
+            db,
+            organization_id=org_id,
+            provider="meta",
+            client_id=client_id,
+            confirm=READ_ONLY_CONFIRM_PHRASE,
+            actor_user_id=user_id,
+            http_client=http,
+        )
+        await db.commit()
+        row = await db.scalar(
+            select(Integration).where(Integration.organization_id == org_id, Integration.provider == "meta")
+        )
+    assert report.status == "VERIFIED"
+    camps = (report.canary_resources or {}).get("campaigns") or []
+    assert len(camps) == 1
+    assert camps[0]["id"] == "120249385449450480"
+    assert (report.canary_resources or {}).get("ad_account", {}).get("id") == "act_1425213246194388"
+    assert row is not None
+    assert (row.config or {}).get("external_account_id") == "act_1425213246194388"
+    assert any(c.get("id") == "120249385449450480" for c in ((row.config or {}).get("discovered_campaigns") or []))
+
+
+@pytest.mark.asyncio
+async def test_meta_readonly_prefers_graph_primary_when_all_campaigns_empty(monkeypatch):
+    """When every act_* returns empty campaigns, prefer Graph order over stale empty primary."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "meta_app_id", "app")
+    monkeypatch.setattr(settings, "meta_app_secret", "secret")
+    org_id, client_id, user_id, _ = await _seed_org(connect_meta=True)
+    http = FakeHttp(
+        {
+            "/me/adaccounts": FakeResp(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "act_1425213246194388",
+                            "account_id": "1425213246194388",
+                            "name": "GrowthOS Test Ads",
+                            "account_status": 1,
+                        },
+                        {
+                            "id": "act_111",
+                            "account_id": "111",
+                            "name": "Personal",
+                            "account_status": 1,
+                        },
+                    ]
+                },
+            ),
+            "/me": FakeResp(200, {"id": "u1", "name": "User"}),
+            "act_111/campaigns": FakeResp(200, {"data": []}),
+            "act_1425213246194388/campaigns": FakeResp(200, {"data": []}),
+        }
+    )
+    async with AsyncSessionLocal() as db:
+        report = await verify_provider_readonly(
+            db,
+            organization_id=org_id,
+            provider="meta",
+            client_id=client_id,
+            confirm=READ_ONLY_CONFIRM_PHRASE,
+            actor_user_id=user_id,
+            http_client=http,
+        )
+        await db.commit()
+        row = await db.scalar(
+            select(Integration).where(Integration.organization_id == org_id, Integration.provider == "meta")
+        )
+    assert report.status == "VERIFIED"
+    assert (report.canary_resources or {}).get("campaigns") == []
+    assert (report.account or {}).get("id") == "act_1425213246194388"
+    assert (row.config or {}).get("external_account_id") == "act_1425213246194388"
+
     settings = get_settings()
     monkeypatch.setattr(settings, "meta_app_id", "app")
     monkeypatch.setattr(settings, "meta_app_secret", "secret")

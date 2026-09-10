@@ -431,6 +431,18 @@ async def _finish_verification(
             resources = report.canary_resources or {}
             ad = resources.get("ad_account") or report.account or {}
             camps = resources.get("campaigns") or []
+            live_accounts = resources.get("ad_accounts") or []
+            if live_accounts:
+                # Replace with fresh Graph discovery (keeps canary allowlist config accurate).
+                cfg["ad_accounts"] = [
+                    {
+                        "id": a.get("id"),
+                        "name": a.get("name"),
+                        "status": a.get("status"),
+                    }
+                    for a in live_accounts[:50]
+                    if isinstance(a, dict) and a.get("id")
+                ]
             if ad.get("id"):
                 cfg["external_account_id"] = ad.get("id")
                 existing = list(cfg.get("ad_accounts") or [])
@@ -444,7 +456,7 @@ async def _finish_verification(
                             "status": ad.get("status"),
                         },
                     )
-                cfg["ad_accounts"] = existing[:50]
+                    cfg["ad_accounts"] = existing[:50]
             if camps:
                 cfg["discovered_campaigns"] = [
                     {"id": c.get("id"), "name": c.get("name"), "status": c.get("status")}
@@ -475,6 +487,174 @@ async def _finish_verification(
             cfg["discovery_updated_at"] = report.checked_at
         row.config = cfg
         await db.flush()
+
+
+def _normalize_meta_act_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("act_"):
+        return raw
+    if raw.isdigit():
+        return f"act_{raw}"
+    return raw
+
+
+def _meta_accessible_id_set(accounts: list[dict[str, Any]]) -> set[str]:
+    out: set[str] = set()
+    for a in accounts:
+        if not isinstance(a, dict):
+            continue
+        aid = _normalize_meta_act_id(a.get("id"))
+        if aid:
+            out.add(aid)
+            out.add(aid.replace("act_", "", 1))
+        if a.get("account_id") is not None:
+            bare = str(a.get("account_id")).replace("act_", "")
+            out.add(bare)
+            out.add(f"act_{bare}")
+    out.discard("")
+    return out
+
+
+def _meta_account_matches(account: dict[str, Any], needle: str) -> bool:
+    target = _normalize_meta_act_id(needle)
+    if not target:
+        return False
+    ids = {
+        _normalize_meta_act_id(account.get("id")),
+        _normalize_meta_act_id(account.get("account_id")),
+        str(account.get("id") or ""),
+        str(account.get("account_id") or ""),
+        f"act_{account.get('account_id')}" if account.get("account_id") is not None else "",
+    }
+    ids.discard("")
+    return target in ids or needle in ids
+
+
+def _select_meta_ad_account(
+    accessible_accounts: list[dict[str, Any]],
+    *,
+    configured_ext: str | None,
+    meta_user_id: str | None,
+    known_ids: set[str],
+    accessible_ids: set[str],
+    allowlisted: set[str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (account, error_message). error_message set on hard mismatch."""
+    if not accessible_accounts:
+        return None, "No accessible Meta ad accounts"
+
+    if allowlisted:
+        for a in accessible_accounts:
+            aid = _normalize_meta_act_id(a.get("id") or a.get("account_id"))
+            if aid in allowlisted or aid.replace("act_", "", 1) in allowlisted:
+                return a, None
+
+    if configured_ext and str(configured_ext) in accessible_ids:
+        for a in accessible_accounts:
+            if _meta_account_matches(a, str(configured_ext)):
+                return a, None
+
+    if configured_ext and str(configured_ext) == str(meta_user_id or ""):
+        return accessible_accounts[0], None
+
+    if configured_ext and known_ids and str(configured_ext) not in accessible_ids and str(configured_ext) not in known_ids:
+        return None, "Configured external_account_id does not match accessible accounts"
+
+    if configured_ext and str(configured_ext) not in accessible_ids and not meta_user_id and not known_ids:
+        if not str(configured_ext).startswith("act_") and configured_ext not in accessible_ids:
+            return accessible_accounts[0], None
+        if str(configured_ext) not in accessible_ids:
+            return None, "Configured external_account_id does not match accessible accounts"
+
+    return accessible_accounts[0], None
+
+
+async def _discover_meta_campaigns_readonly(
+    http_client: AsyncHttpClient,
+    *,
+    access_token: str,
+    primary: dict[str, Any],
+    accessible_accounts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, bool, str, str | None]:
+    """
+    Read-only campaign discovery across accessible ad accounts.
+
+    Returns (campaigns, account_with_campaigns_or_primary, ok, detail, error_category).
+    """
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for a in [primary, *accessible_accounts]:
+        if not isinstance(a, dict):
+            continue
+        aid = _normalize_meta_act_id(a.get("id") or a.get("account_id"))
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        ordered.append(a)
+
+    campaigns: list[dict[str, Any]] = []
+    account_with_campaigns: dict[str, Any] | None = None
+    any_ok = False
+    last_error_detail = "No ad account id for campaign discovery"
+    last_error_category: str | None = None
+
+    for acct in ordered:
+        account_id = _normalize_meta_act_id(acct.get("id") or acct.get("account_id"))
+        if not account_id:
+            continue
+        try:
+            camp_resp = await http_client.get(
+                f"{META_GRAPH_VERSIONED}/{account_id}/campaigns",
+                params={
+                    "access_token": access_token,
+                    "fields": "id,name,status,effective_status",
+                    "limit": 25,
+                },
+            )
+        except Exception as exc:
+            last_error_detail = _safe_error_detail(exc)
+            last_error_category = "API_ERROR"
+            continue
+
+        if camp_resp.status_code >= 400:
+            last_error_detail = f"campaigns HTTP {camp_resp.status_code}"
+            last_error_category = _classify_http_error(camp_resp.status_code, camp_resp.text).value
+            continue
+
+        any_ok = True
+        raw = (camp_resp.json() if hasattr(camp_resp, "json") else {}).get("data") or []
+        found_here: list[dict[str, Any]] = []
+        for c in raw[:25]:
+            if not isinstance(c, dict) or not c.get("id"):
+                continue
+            found_here.append(
+                {
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "status": c.get("effective_status") or c.get("status"),
+                    "ad_account_id": account_id,
+                }
+            )
+        if found_here and account_with_campaigns is None:
+            account_with_campaigns = acct
+        for c in found_here:
+            if len(campaigns) >= 25:
+                break
+            if any(existing.get("id") == c.get("id") for existing in campaigns):
+                continue
+            campaigns.append(c)
+
+    if any_ok:
+        return (
+            campaigns,
+            account_with_campaigns or primary,
+            True,
+            f"Campaigns read OK ({len(campaigns)} found)",
+            None,
+        )
+    return [], primary, False, last_error_detail, last_error_category
 
 
 async def _verify_meta_readonly(
@@ -620,62 +800,42 @@ async def _verify_meta_readonly(
         for a in (cfg.get("ad_accounts") or [])
         if isinstance(a, dict) and a.get("id")
     }
-    accessible_ids: set[str] = set()
-    for a in accounts:
-        if not isinstance(a, dict):
-            continue
-        accessible_ids.add(str(a.get("id") or ""))
-        if a.get("account_id") is not None:
-            accessible_ids.add(str(a.get("account_id")))
-            accessible_ids.add(f"act_{a.get('account_id')}")
-    accessible_ids.discard("")
+    accessible_accounts = [a for a in accounts if isinstance(a, dict) and (a.get("id") or a.get("account_id"))]
+    accessible_ids = _meta_accessible_id_set(accessible_accounts)
 
-    # Prefer the configured ad account when it is still accessible; else first accessible.
-    # Legacy OAuth stored Graph user id as external_account_id — do not fail hard on that.
-    account = accounts[0]
-    if configured_ext and str(configured_ext) in accessible_ids:
-        for a in accounts:
-            if not isinstance(a, dict):
-                continue
-            ids = {str(a.get("id") or ""), str(a.get("account_id") or ""), f"act_{a.get('account_id')}"}
-            if str(configured_ext) in ids:
-                account = a
-                break
-    elif configured_ext and str(configured_ext) == str(meta_user_id or ""):
-        # Legacy user-id identity — ad accounts are still readable; proceed with first.
-        pass
-    elif configured_ext and known_ids and str(configured_ext) not in accessible_ids and str(configured_ext) not in known_ids:
+    allowlisted = {
+        _normalize_meta_act_id(x)
+        for x in (settings.canary_allowed_meta_ad_accounts or "").split(",")
+        if str(x).strip()
+    }
+    allowlisted.discard("")
+
+    # Prefer allowlisted act_* → configured act_* → Graph order. Legacy Graph user id
+    # stored as external_account_id must not hard-fail when ad accounts are readable.
+    account, selection_error = _select_meta_ad_account(
+        accessible_accounts,
+        configured_ext=str(configured_ext) if configured_ext else None,
+        meta_user_id=str(meta_user_id) if meta_user_id else None,
+        known_ids=known_ids,
+        accessible_ids=accessible_ids,
+        allowlisted=allowlisted,
+    )
+    if selection_error:
         report.steps.append(
             VerificationStepResult(
                 "account_identity",
                 False,
-                "Configured external_account_id does not match accessible accounts",
+                selection_error,
                 category="ACCOUNT_ACCESS",
             )
         )
         report.error_category = VerificationErrorCategory.account_access.value
         report.checks.extend([s.as_dict() for s in report.steps])
         return report
-    elif configured_ext and str(configured_ext) not in accessible_ids and not meta_user_id and not known_ids:
-        # Strict mismatch when we have no legacy/user context
-        if not str(configured_ext).startswith("act_") and configured_ext not in accessible_ids:
-            # Likely legacy user id without meta_user_id field — allow discovery
-            pass
-        elif str(configured_ext) not in accessible_ids:
-            report.steps.append(
-                VerificationStepResult(
-                    "account_identity",
-                    False,
-                    "Configured external_account_id does not match accessible accounts",
-                    category="ACCOUNT_ACCESS",
-                )
-            )
-            report.error_category = VerificationErrorCategory.account_access.value
-            report.checks.extend([s.as_dict() for s in report.steps])
-            return report
+    assert account is not None
 
     report.account = {
-        "id": account.get("id") or account.get("account_id"),
+        "id": _normalize_meta_act_id(account.get("id") or account.get("account_id")),
         "name": account.get("name"),
         "currency": account.get("currency"),
         "timezone": account.get("timezone_name"),
@@ -690,49 +850,65 @@ async def _verify_meta_readonly(
         )
     )
 
-    # Campaign discovery for canary allowlist configuration (read-only)
-    account_id = account.get("id")
+    # Campaign discovery: scan primary first, then other accessible accounts (read-only).
+    # Stale external_account_id must not hide campaigns on another accessible act_*.
     caps: list[dict[str, Any]] = [
         {"name": "READ_ACCOUNT", "status": "VERIFIED"},
         {"name": "PAUSE_CAMPAIGN", "status": "SUPPORTED"},
         {"name": "RESUME_CAMPAIGN", "status": "SUPPORTED"},
     ]
-    campaigns: list[dict[str, Any]] = []
-    if account_id:
-        try:
-            camp_resp = await http_client.get(
-                f"{META_GRAPH_VERSIONED}/{account_id}/campaigns",
-                params={"access_token": access, "fields": "id,name,status,effective_status", "limit": 25},
+    campaigns, discovery_account, read_ok, read_detail, read_category = await _discover_meta_campaigns_readonly(
+        http_client,
+        access_token=access,
+        primary=account,
+        accessible_accounts=accessible_accounts,
+    )
+    if read_ok:
+        caps.append({"name": "READ_CAMPAIGNS", "status": "VERIFIED"})
+        report.steps.append(
+            VerificationStepResult(
+                "read_campaigns",
+                True,
+                read_detail,
+                observed={"campaign_count": len(campaigns)},
             )
-            if camp_resp.status_code < 400:
-                caps.append({"name": "READ_CAMPAIGNS", "status": "VERIFIED"})
-                report.steps.append(VerificationStepResult("read_campaigns", True, "Campaigns read OK"))
-                raw = (camp_resp.json() if hasattr(camp_resp, "json") else {}).get("data") or []
-                for c in raw[:25]:
-                    if not isinstance(c, dict):
-                        continue
-                    campaigns.append(
-                        {
-                            "id": c.get("id"),
-                            "name": c.get("name"),
-                            "status": c.get("effective_status") or c.get("status"),
-                        }
-                    )
-            else:
-                caps.append({"name": "READ_CAMPAIGNS", "status": "FAILED"})
-                report.steps.append(
-                    VerificationStepResult(
-                        "read_campaigns",
-                        False,
-                        f"campaigns HTTP {camp_resp.status_code}",
-                        category=_classify_http_error(camp_resp.status_code, camp_resp.text).value,
-                    )
-                )
-        except Exception as exc:
-            caps.append({"name": "READ_CAMPAIGNS", "status": "FAILED"})
-            report.steps.append(
-                VerificationStepResult("read_campaigns", False, _safe_error_detail(exc), category="API_ERROR")
+        )
+    else:
+        caps.append({"name": "READ_CAMPAIGNS", "status": "FAILED"})
+        report.steps.append(
+            VerificationStepResult(
+                "read_campaigns",
+                False,
+                read_detail,
+                category=read_category,
             )
+        )
+
+    if discovery_account is not None and _normalize_meta_act_id(discovery_account.get("id")) != str(
+        report.account.get("id") or ""
+    ):
+        report.account = {
+            "id": _normalize_meta_act_id(discovery_account.get("id") or discovery_account.get("account_id")),
+            "name": discovery_account.get("name"),
+            "currency": discovery_account.get("currency"),
+            "timezone": discovery_account.get("timezone_name"),
+            "status": discovery_account.get("account_status"),
+        }
+
+    # When no campaigns anywhere, prefer Graph's first account over a stale empty primary
+    # so newly created Business ad accounts surface as verification identity.
+    if not campaigns and accessible_accounts:
+        primary_id = _normalize_meta_act_id(report.account.get("id"))
+        first = accessible_accounts[0]
+        first_id = _normalize_meta_act_id(first.get("id") or first.get("account_id"))
+        if first_id and first_id != primary_id and not allowlisted:
+            report.account = {
+                "id": first_id,
+                "name": first.get("name"),
+                "currency": first.get("currency"),
+                "timezone": first.get("timezone_name"),
+                "status": first.get("account_status"),
+            }
 
     report.canary_resources = {
         "ad_account": {
@@ -740,6 +916,14 @@ async def _verify_meta_readonly(
             "name": report.account.get("name"),
             "status": report.account.get("status"),
         },
+        "ad_accounts": [
+            {
+                "id": _normalize_meta_act_id(a.get("id") or a.get("account_id")),
+                "name": a.get("name"),
+                "status": a.get("account_status"),
+            }
+            for a in accessible_accounts[:50]
+        ],
         "campaigns": campaigns,
         "supported_capabilities": ["pause_campaign", "resume_campaign", "get_status"],
     }
