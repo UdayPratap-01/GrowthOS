@@ -38,7 +38,10 @@ META_GRAPH = "https://graph.facebook.com/v21.0"
 
 
 PROVIDER_SCOPES = {
-    "meta": ["ads_read", "ads_management", "business_management", "read_insights"],
+    # Marketing API / Ads: insights for ad objects are covered by ads_read.
+    # Do not request read_insights here — Meta rejects it as Invalid Scopes for
+    # Marketing API OAuth (it is a Page Insights permission, not Ads).
+    "meta": ["ads_read", "ads_management", "business_management"],
     "instagram": ["instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"],
     "whatsapp": ["whatsapp_business_management", "whatsapp_business_messaging", "business_management"],
 }

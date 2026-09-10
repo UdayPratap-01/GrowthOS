@@ -17,7 +17,7 @@ from app.automation.canary import CANARY_CONFIRM_PHRASE, canary_execute, evaluat
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
-from app.integrations.meta_family import MetaFamilyIntegration
+from app.integrations.meta_family import PROVIDER_SCOPES, MetaFamilyIntegration
 from app.integrations.meta_oauth import (
     build_meta_connection_config,
     discover_meta_ad_accounts,
@@ -53,6 +53,13 @@ class FakeResp:
 
 
 # ---- Unit: error classification / discovery helpers --------------------------
+
+
+def test_meta_oauth_scopes_exclude_deprecated_read_insights():
+    """Marketing API OAuth must not request read_insights (Meta Invalid Scopes)."""
+    scopes = PROVIDER_SCOPES["meta"]
+    assert scopes == ["ads_read", "ads_management", "business_management"]
+    assert "read_insights" not in scopes
 
 
 def test_classify_meta_graph_errors():

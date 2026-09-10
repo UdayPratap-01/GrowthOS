@@ -75,14 +75,28 @@ Verify body:
 
 | Item | Detail |
 |------|--------|
-| Env | `META_APP_ID`, `META_APP_SECRET`, optional `META_REDIRECT_URI` |
-| Redirect | `{API_PUBLIC_URL}/api/v1/integrations/meta/callback` must be allowlisted in Meta App |
-| Scopes | `ads_read`, `ads_management`, `business_management`, `read_insights` |
+| Meta app type | **Business** app with Marketing API use cases (`Create & manage ads`, `Measure ad performance`). Consumer/login-only apps reject ads scopes. |
+| Env | `META_APP_ID`, `META_APP_SECRET`, optional `META_REDIRECT_URI` (set in root `.env` **and** `apps/api/.env` when API may start from either cwd) |
+| Redirect | `{API_PUBLIC_URL}/api/v1/integrations/meta/callback` must be allowlisted under **Facebook Login for Business** Valid OAuth Redirect URIs |
+| Scopes | `ads_read`, `ads_management`, `business_management` (ad insights via `ads_read`; do **not** request `read_insights`) |
+| Access | Development / Standard Access is enough for app-role users on ad accounts they administer; Advanced Access only for third-party accounts (App Review) |
 | Storage | Encrypted Fernet blob (`ENCRYPTION_KEY`); never logged |
 | Token lifecycle | Short-lived code exchange → **long-lived** `fb_exchange_token`; `ensure_meta_access_token` renews near expiry |
 | Discovery | On connect: `/me` + `/me/adaccounts` → `config.meta_user_id`, `config.external_account_id` (`act_*`), `config.ad_accounts` |
+| Status vocabulary | **CONFIGURED** = App ID/Secret present · **Connected** = OAuth tokens stored · **VERIFIED** = read-only provider verification passed · Verified ≠ autonomous spend |
 
 Helpers: `apps/api/app/integrations/meta_oauth.py`
+
+### Read-only verification (after Connect)
+
+1. GrowthOS → **Integrations** → Meta → **Connect** → authorize in Meta.
+2. Operator → **Refresh verification** (confirm phrase `I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION`).
+3. Expect stage **VERIFIED**; still keep `AUTONOMOUS_EXECUTION_ENABLED=false`, `CANARY_ENABLED=false` until a separate controlled canary.
+
+### Controlled canary (separate step — not part of OAuth)
+
+Allowlists + confirm phrase only; never enable unrestricted autonomy after a successful canary.
+
 
 ## Google OAuth prerequisites (M7)
 

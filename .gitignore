@@ -1,5 +1,9 @@
 .env
 .env.local
+.env.save
+*.env.save
+**/.env.save
+**/*.env.save
 .venv/
 venv/
 __pycache__/
@@ -35,4 +39,6 @@ apps/api/growthos.db
 .idea/
 .vscode/
 apps/api/.env
+apps/api/.env.save
 apps/web/.env.local
+apps/web/.env.local.save
