@@ -1,11 +1,24 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import get_settings
 from app.main import app
 
 
+@pytest.fixture
+def no_provider_credentials(monkeypatch):
+    """Isolate from developer .env — tests must behave as if OAuth apps are unset."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "meta_app_id", "")
+    monkeypatch.setattr(settings, "meta_app_secret", "")
+    monkeypatch.setattr(settings, "google_client_id", "")
+    monkeypatch.setattr(settings, "google_client_secret", "")
+    monkeypatch.setattr(settings, "google_ads_developer_token", "")
+    return settings
+
+
 @pytest.mark.asyncio
-async def test_integration_statuses_and_connect_without_credentials():
+async def test_integration_statuses_and_connect_without_credentials(no_provider_credentials):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         login = await client.post("/api/v1/auth/login", json={"email": "demo@growthos.ai", "password": "demo1234"})

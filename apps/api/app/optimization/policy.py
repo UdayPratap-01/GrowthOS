@@ -60,6 +60,7 @@ async def evaluate_policy(
     integration_connected: bool,
     credentials_configured: bool,
     app_settings: Settings | None = None,
+    allow_recommendation_retry: bool = False,
 ) -> PolicyResult:
     """
     Explicit policy evaluation. Failures return BLOCKED with reasons —
@@ -265,6 +266,7 @@ async def evaluate_policy(
                         AIActionStatus.approved,
                         AIActionStatus.executing,
                         AIActionStatus.completed,
+                        AIActionStatus.failed,
                     ]
                 ),
             ).limit(1)
@@ -317,13 +319,16 @@ async def evaluate_policy(
     existing_for_rec = await _find_action_for_recommendation(
         db, organization_id=organization_id, recommendation_id=recommendation.id
     )
-    # Allow if prior action failed (retry path) but block pending/completed for same rec
-    if existing_for_rec is not None and existing_for_rec.status in {
+    duplicate_blocking_statuses = {
         AIActionStatus.pending,
         AIActionStatus.approved,
         AIActionStatus.executing,
         AIActionStatus.completed,
-    }:
+    }
+    if not allow_recommendation_retry:
+        duplicate_blocking_statuses.add(AIActionStatus.failed)
+    # Allow failed retry only on explicit approval re-evaluation; block repeats otherwise.
+    if existing_for_rec is not None and existing_for_rec.status in duplicate_blocking_statuses:
         # Ambiguous reconciliation blocked retries are also not duplicable as new actions
         recon = (existing_for_rec.result or {}).get("reconciliation") or {}
         if recon.get("state") in {"PENDING", "UNKNOWN"}:

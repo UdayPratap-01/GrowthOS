@@ -164,6 +164,7 @@ class ClosedLoopOptimizer:
             integration_connected=connected,
             credentials_configured=credentials_configured,
             app_settings=app_settings,
+            allow_recommendation_retry=trigger == "approve",
         )
 
         await write_audit(
@@ -507,6 +508,7 @@ class ClosedLoopOptimizer:
 
         payload = {
             **proposal.payload,
+            "recommendation_id": str(recommendation.id),
             "optimization": True,
             "closed_loop": True,
             "idempotency_key": f"opt:{recommendation.fingerprint}:{proposal.action_type.value}",
