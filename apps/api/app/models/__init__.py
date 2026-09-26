@@ -39,6 +39,7 @@ from app.models.marketing import (
 )
 from app.models.performance_intelligence import PerformanceRecommendation
 from app.models.keyword_opportunity import KeywordOpportunity
+from app.models.topic_cluster import TopicCluster, TopicClusterPage, TopicClusterQuery
 from app.models.search_console import SearchConsoleOpportunity, SearchConsolePerformanceRow, SearchConsoleSync
 from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
 from app.models.organization import Organization, OrganizationMember
@@ -78,6 +79,9 @@ __all__ = [
     "SearchConsolePerformanceRow",
     "SearchConsoleOpportunity",
     "KeywordOpportunity",
+    "TopicCluster",
+    "TopicClusterQuery",
+    "TopicClusterPage",
     "AIConversation",
     "Report",
     "Integration",

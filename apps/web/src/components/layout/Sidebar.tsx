@@ -49,6 +49,7 @@ const nav = [
   { href: "/seo", label: "SEO Crawler", icon: BarChart3 },
   { href: "/seo/search-console", label: "Search Console", icon: BarChart3 },
   { href: "/seo/keywords", label: "Keywords", icon: BarChart3 },
+  { href: "/seo/topics", label: "Topics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
