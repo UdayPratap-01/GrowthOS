@@ -226,6 +226,7 @@ def policies() -> dict[str, RateLimitPolicy]:
         "webhook": RateLimitPolicy("webhook", s.webhook_rate_limit_per_minute, 60),
         "seo_crawl": RateLimitPolicy("seo_crawl", s.seo_crawl_rate_limit_per_hour, 3600),
         "gsc_sync": RateLimitPolicy("gsc_sync", s.gsc_sync_rate_limit_per_hour, 3600),
+        "keyword_analyze": RateLimitPolicy("keyword_analyze", s.keyword_analyze_rate_limit_per_hour, 3600),
     }
 
 

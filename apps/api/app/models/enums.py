@@ -149,6 +149,13 @@ class SearchConsoleOpportunityPriority(str, enum.Enum):
     high = "high"
 
 
+class KeywordOpportunityPriority(str, enum.Enum):
+    info = "info"
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
 class JobStatus(str, enum.Enum):
     queued = "queued"
     submitted = "submitted"

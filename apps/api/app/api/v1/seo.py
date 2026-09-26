@@ -25,10 +25,12 @@ from app.publishing.capabilities import (
     youtube_capabilities,
 )
 from app.seo.audit import run_technical_seo_audit
+from app.api.v1.seo_keywords import router as keywords_router
 from app.api.v1.seo_search_console import router as search_console_router
 
 router = APIRouter(prefix="/seo", tags=["seo"])
 router.include_router(search_console_router)
+router.include_router(keywords_router)
 
 
 class SeoAuditRequest(BaseModel):
