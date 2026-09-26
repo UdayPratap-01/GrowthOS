@@ -50,6 +50,8 @@ const nav = [
   { href: "/seo/search-console", label: "Search Console", icon: BarChart3 },
   { href: "/seo/keywords", label: "Keywords", icon: BarChart3 },
   { href: "/seo/topics", label: "Topics", icon: BarChart3 },
+  { href: "/seo/competitors", label: "Competitors", icon: BarChart3 },
+  { href: "/seo/content-gaps", label: "Content Gaps", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

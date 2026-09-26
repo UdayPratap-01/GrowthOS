@@ -228,6 +228,8 @@ def policies() -> dict[str, RateLimitPolicy]:
         "gsc_sync": RateLimitPolicy("gsc_sync", s.gsc_sync_rate_limit_per_hour, 3600),
         "keyword_analyze": RateLimitPolicy("keyword_analyze", s.keyword_analyze_rate_limit_per_hour, 3600),
         "topic_analyze": RateLimitPolicy("topic_analyze", s.topic_analyze_rate_limit_per_hour, 3600),
+        "seo_competitor_crawl": RateLimitPolicy("seo_competitor_crawl", s.seo_competitor_crawl_rate_limit_per_hour, 3600),
+        "content_gap_analyze": RateLimitPolicy("content_gap_analyze", s.content_gap_analyze_rate_limit_per_hour, 3600),
     }
 
 

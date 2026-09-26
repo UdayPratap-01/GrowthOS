@@ -782,3 +782,29 @@ async def handle_seo_crawl(db: AsyncSession, job: BackgroundJob) -> dict:
             await db.flush()
 
     return result
+
+
+async def handle_seo_competitor_crawl(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Bounded read-only competitor crawl — reuses M9.1 fetcher/parser/SSRF."""
+    from app.models.enums import SeoCrawlStatus
+    from app.models.seo_competitor import SeoCompetitorCrawl
+    from app.seo.competitor_crawler import CompetitorSiteCrawler
+    from app.seo.limits import clamp_competitor_crawl_limits
+
+    payload = job.payload or {}
+    crawl_id_raw = payload.get("crawl_id")
+    if not crawl_id_raw:
+        raise UnrecoverableJobError("payload.crawl_id is required")
+    if job.organization_id is None:
+        raise UnrecoverableJobError("seo.competitor_crawl requires organization_id")
+
+    crawl = await db.get(SeoCompetitorCrawl, UUID(str(crawl_id_raw)))
+    if not crawl or crawl.organization_id != job.organization_id:
+        raise UnrecoverableJobError("Competitor crawl not found for tenant")
+    if crawl.cancel_requested or crawl.status == SeoCrawlStatus.cancelled:
+        crawl.status = SeoCrawlStatus.cancelled
+        await db.flush()
+        return {"crawl_id": str(crawl.id), "status": crawl.status.value, "cancelled": True}
+
+    limits = clamp_competitor_crawl_limits(crawl.config)
+    return await CompetitorSiteCrawler(limits=limits).run(db, crawl)

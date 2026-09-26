@@ -30,6 +30,7 @@ PROVIDER_RECONCILE = "provider.reconcile"
 ANALYTICS_INGEST = "analytics.ingest"
 ANALYTICS_ANALYZE = "analytics.analyze"
 SEO_CRAWL = "seo.crawl"
+SEO_COMPETITOR_CRAWL = "seo.competitor_crawl"
 
 
 def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
@@ -51,6 +52,7 @@ def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
     queue.register(AUTOPILOT_CYCLE, handlers.handle_autopilot_cycle)
     queue.register(PROVIDER_RECONCILE, handlers.handle_provider_reconcile)
     queue.register(SEO_CRAWL, handlers.handle_seo_crawl)
+    queue.register(SEO_COMPETITOR_CRAWL, handlers.handle_seo_competitor_crawl)
     return queue
 
 
@@ -71,4 +73,5 @@ def registered_job_types() -> tuple[str, ...]:
         AUTOPILOT_CYCLE,
         PROVIDER_RECONCILE,
         SEO_CRAWL,
+        SEO_COMPETITOR_CRAWL,
     )

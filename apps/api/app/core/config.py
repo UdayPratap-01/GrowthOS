@@ -140,6 +140,12 @@ class Settings(BaseSettings):
     gsc_sync_max_rows_per_dimension: int = 500
     keyword_analyze_rate_limit_per_hour: int = 12
     topic_analyze_rate_limit_per_hour: int = 12
+    seo_competitor_max_per_org: int = 10
+    seo_competitor_crawl_max_pages_default: int = 25
+    seo_competitor_crawl_max_pages_hard: int = 100
+    seo_competitor_crawl_rate_limit_per_hour: int = 6
+    content_gap_analyze_rate_limit_per_hour: int = 12
+    content_gap_max_comparisons: int = 5000
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10
