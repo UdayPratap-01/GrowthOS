@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import AuthContext, get_current_auth
 from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.schemas.seo_analysis import SeoFindingCompareOut, SeoFindingOut, SeoFindingSummaryOut
 from app.schemas.seo_crawl import SeoCrawlCreateRequest, SeoCrawlOut, SeoCrawlPageOut
 from app.security.limits import seo_crawl_limit
+from app.services.seo_analysis_service import SeoAnalysisService
 from app.services.seo_crawl_service import SeoCrawlService
 from app.integrations.base import IntegrationConnectionStatus
 from app.integrations.persistence import get_integration_row
@@ -86,6 +88,76 @@ async def list_seo_crawl_pages(
         organization_id=auth.organization_id, crawl_id=crawl_id, limit=limit, offset=offset
     )
     return [SeoCrawlPageOut.model_validate(page) for page in pages]
+
+
+@router.get("/crawls/{crawl_id}/findings", response_model=list[SeoFindingOut])
+async def list_seo_findings(
+    crawl_id: UUID,
+    category: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    status: str | None = Query(default=None, alias="status"),
+    rule_id: str | None = Query(default=None),
+    url: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> list[SeoFindingOut]:
+    findings = await SeoAnalysisService(db).list_findings(
+        organization_id=auth.organization_id,
+        crawl_id=crawl_id,
+        category=category,
+        severity=severity,
+        status_filter=status,
+        rule_id=rule_id,
+        url=url,
+        limit=limit,
+        offset=offset,
+    )
+    await db.commit()
+    return [SeoFindingOut.model_validate(row) for row in findings]
+
+
+@router.get("/crawls/{crawl_id}/findings/compare", response_model=SeoFindingCompareOut)
+async def compare_seo_findings(
+    crawl_id: UUID,
+    other_crawl_id: UUID = Query(...),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoFindingCompareOut:
+    result = await SeoAnalysisService(db).compare(
+        organization_id=auth.organization_id,
+        crawl_id=crawl_id,
+        other_crawl_id=other_crawl_id,
+    )
+    await db.commit()
+    return SeoFindingCompareOut.model_validate(result)
+
+
+@router.get("/crawls/{crawl_id}/findings/{finding_id}", response_model=SeoFindingOut)
+async def get_seo_finding(
+    crawl_id: UUID,
+    finding_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoFindingOut:
+    finding = await SeoAnalysisService(db).get_finding(
+        organization_id=auth.organization_id,
+        crawl_id=crawl_id,
+        finding_id=finding_id,
+    )
+    return SeoFindingOut.model_validate(finding)
+
+
+@router.get("/crawls/{crawl_id}/summary", response_model=SeoFindingSummaryOut)
+async def get_seo_crawl_summary(
+    crawl_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoFindingSummaryOut:
+    summary = await SeoAnalysisService(db).summary(organization_id=auth.organization_id, crawl_id=crawl_id)
+    await db.commit()
+    return SeoFindingSummaryOut.model_validate(summary)
 
 
 @router.post("/crawls/{crawl_id}/cancel", response_model=SeoCrawlOut)

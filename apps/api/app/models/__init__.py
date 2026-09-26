@@ -38,7 +38,7 @@ from app.models.marketing import (
     SocialPost,
 )
 from app.models.performance_intelligence import PerformanceRecommendation
-from app.models.seo import SeoCrawl, SeoCrawlPage
+from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
 from app.models.usage import UsageRecord
@@ -71,6 +71,7 @@ __all__ = [
     "PerformanceRecommendation",
     "SeoCrawl",
     "SeoCrawlPage",
+    "SeoFinding",
     "AIConversation",
     "Report",
     "Integration",

@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.models.enums import SeoCrawlStatus
+from app.models.enums import SeoCrawlStatus, SeoFindingSeverity, SeoFindingStatus
 
 
 class SeoCrawl(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -51,3 +51,23 @@ class SeoCrawlPage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     observations: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     data_source: Mapped[str] = mapped_column(String(32), default="http_crawl", nullable=False)
+
+
+class SeoFinding(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "seo_findings"
+
+    crawl_id: Mapped[UUID] = mapped_column(ForeignKey("seo_crawls.id", ondelete="CASCADE"), index=True)
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    page_id: Mapped[UUID | None] = mapped_column(ForeignKey("seo_crawl_pages.id", ondelete="SET NULL"), nullable=True, index=True)
+    rule_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    severity: Mapped[SeoFindingSeverity] = mapped_column(String(16), nullable=False, index=True)
+    status: Mapped[SeoFindingStatus] = mapped_column(String(16), default=SeoFindingStatus.open, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    observed_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected_or_heuristic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

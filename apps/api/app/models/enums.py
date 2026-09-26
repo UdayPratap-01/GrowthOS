@@ -123,6 +123,18 @@ class SeoCrawlStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class SeoFindingSeverity(str, enum.Enum):
+    info = "INFO"
+    low = "LOW"
+    medium = "MEDIUM"
+    high = "HIGH"
+
+
+class SeoFindingStatus(str, enum.Enum):
+    open = "open"
+    resolved = "resolved"
+
+
 class JobStatus(str, enum.Enum):
     queued = "queued"
     submitted = "submitted"

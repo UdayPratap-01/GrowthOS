@@ -767,4 +767,18 @@ async def handle_seo_crawl(db: AsyncSession, job: BackgroundJob) -> dict:
     limits = clamp_crawl_limits(crawl.config)
     result = await SiteCrawler(limits=limits).run(db, crawl)
     await db.flush()
+
+    if crawl.status.value in {"completed", "cancelled"}:
+        from app.services.seo_analysis_service import SeoAnalysisService
+
+        try:
+            analysis = await SeoAnalysisService(db).run_analysis(
+                organization_id=job.organization_id,
+                crawl_id=crawl.id,
+            )
+            result["analysis"] = analysis
+        except Exception:
+            crawl.stats = {**(crawl.stats or {}), "analysis_status": "failed"}
+            await db.flush()
+
     return result
