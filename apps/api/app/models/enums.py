@@ -135,6 +135,20 @@ class SeoFindingStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+class SearchConsoleSyncStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class SearchConsoleOpportunityPriority(str, enum.Enum):
+    info = "info"
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
 class JobStatus(str, enum.Enum):
     queued = "queued"
     submitted = "submitted"

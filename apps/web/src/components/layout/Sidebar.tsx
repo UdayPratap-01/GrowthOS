@@ -47,6 +47,7 @@ const nav = [
   { href: "/ai-assistant", label: "AI Assistant", icon: Bot },
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/seo", label: "SEO Crawler", icon: BarChart3 },
+  { href: "/seo/search-console", label: "Search Console", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

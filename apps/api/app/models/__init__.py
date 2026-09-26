@@ -38,6 +38,7 @@ from app.models.marketing import (
     SocialPost,
 )
 from app.models.performance_intelligence import PerformanceRecommendation
+from app.models.search_console import SearchConsoleOpportunity, SearchConsolePerformanceRow, SearchConsoleSync
 from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
@@ -72,6 +73,9 @@ __all__ = [
     "SeoCrawl",
     "SeoCrawlPage",
     "SeoFinding",
+    "SearchConsoleSync",
+    "SearchConsolePerformanceRow",
+    "SearchConsoleOpportunity",
     "AIConversation",
     "Report",
     "Integration",

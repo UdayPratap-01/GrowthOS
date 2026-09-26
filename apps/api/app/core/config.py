@@ -135,6 +135,9 @@ class Settings(BaseSettings):
 
     # SEO — Google Search Console (read-only; shares Google OAuth client)
     google_search_console_redirect_uri: str = ""
+    gsc_sync_rate_limit_per_hour: int = 6
+    gsc_sync_timeout_seconds: float = 45.0
+    gsc_sync_max_rows_per_dimension: int = 500
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10
