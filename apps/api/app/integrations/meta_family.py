@@ -390,12 +390,161 @@ class MetaFamilyIntegration(MarketingIntegration):
                 await db.flush()
                 return records
 
-            # Instagram / WhatsApp: verify token + list reachable objects; persist sync metadata only
+            if self.provider == "whatsapp":
+                return await self._sync_whatsapp_metadata(
+                    db, organization_id, client_id, access_token, client
+                )
+
+            # Instagram: verify token; persist sync metadata only (no invented metrics)
             me = await client.get(f"{META_GRAPH}/me", params={"access_token": access_token, "fields": "id,name"})
             if me.status_code >= 400:
                 raise RuntimeError(me.text)
-            # Without additional asset IDs we do not invent daily metrics.
             return 1 if me.json().get("id") else 0
+
+    async def _sync_whatsapp_metadata(
+        self,
+        db: AsyncSession,
+        organization_id: UUID,
+        client_id: UUID | None,
+        access_token: str,
+        client: httpx.AsyncClient,
+    ) -> int:
+        """Read-only WhatsApp Business account + phone number discovery."""
+        row = await get_integration_row(
+            db, organization_id=organization_id, provider="whatsapp", client_id=client_id
+        )
+        me = await client.get(
+            f"{META_GRAPH}/me",
+            params={"access_token": access_token, "fields": "id,name"},
+        )
+        if me.status_code >= 400:
+            raise RuntimeError(f"WhatsApp token verification failed: HTTP {me.status_code}")
+
+        businesses: list[dict] = []
+        biz_resp = await client.get(
+            f"{META_GRAPH}/me/businesses",
+            params={"access_token": access_token, "fields": "id,name"},
+        )
+        if biz_resp.status_code < 400:
+            businesses = biz_resp.json().get("data") or []
+
+        waba_accounts: list[dict] = []
+        phone_numbers: list[dict] = []
+        for biz in businesses[:5]:
+            biz_id = biz.get("id")
+            if not biz_id:
+                continue
+            waba_resp = await client.get(
+                f"{META_GRAPH}/{biz_id}/owned_whatsapp_business_accounts",
+                params={"access_token": access_token, "fields": "id,name,timezone_id"},
+            )
+            if waba_resp.status_code >= 400:
+                continue
+            for waba in waba_resp.json().get("data") or []:
+                waba_id = waba.get("id")
+                if not waba_id:
+                    continue
+                waba_accounts.append(
+                    {
+                        "id": waba_id,
+                        "name": waba.get("name"),
+                        "business_id": biz_id,
+                        "timezone_id": waba.get("timezone_id"),
+                    }
+                )
+                phones_resp = await client.get(
+                    f"{META_GRAPH}/{waba_id}/phone_numbers",
+                    params={
+                        "access_token": access_token,
+                        "fields": "id,display_phone_number,verified_name,quality_rating,status",
+                    },
+                )
+                if phones_resp.status_code >= 400:
+                    continue
+                for phone in phones_resp.json().get("data") or []:
+                    phone_numbers.append(
+                        {
+                            "id": phone.get("id"),
+                            "display_phone_number": phone.get("display_phone_number"),
+                            "verified_name": phone.get("verified_name"),
+                            "quality_rating": phone.get("quality_rating"),
+                            "status": phone.get("status"),
+                            "waba_id": waba_id,
+                        }
+                    )
+
+        if row:
+            cfg = dict(row.config or {})
+            cfg["whatsapp_business_accounts"] = waba_accounts[:10]
+            cfg["phone_numbers"] = phone_numbers[:20]
+            cfg["webhook_status"] = "PENDING_PUBLIC_HTTPS"
+            cfg["account_label"] = (
+                phone_numbers[0].get("verified_name")
+                or phone_numbers[0].get("display_phone_number")
+                or waba_accounts[0].get("name")
+                if (phone_numbers or waba_accounts)
+                else cfg.get("account_label") or "WhatsApp"
+            )
+            row.config = cfg
+            await db.flush()
+
+        if client_id and phone_numbers:
+            primary = phone_numbers[0]
+            await self._upsert_whatsapp_social(
+                db,
+                organization_id=organization_id,
+                client_id=client_id,
+                external_id=str(primary.get("id") or primary.get("waba_id") or "whatsapp"),
+                name=str(primary.get("verified_name") or primary.get("display_phone_number") or "WhatsApp"),
+                meta={
+                    "waba_count": len(waba_accounts),
+                    "phone_count": len(phone_numbers),
+                    "webhook_status": "PENDING_PUBLIC_HTTPS",
+                    "source": "whatsapp_live",
+                },
+            )
+        return max(1, len(waba_accounts) + len(phone_numbers))
+
+    async def _upsert_whatsapp_social(
+        self,
+        db: AsyncSession,
+        *,
+        organization_id: UUID,
+        client_id: UUID,
+        external_id: str,
+        name: str,
+        meta: dict,
+    ) -> SocialAccount:
+        from sqlalchemy import select
+
+        row = await db.scalar(
+            select(SocialAccount).where(
+                SocialAccount.organization_id == organization_id,
+                SocialAccount.client_id == client_id,
+                SocialAccount.provider == "whatsapp",
+                SocialAccount.external_id == external_id,
+            ).limit(1)
+        )
+        if row:
+            row.name = name
+            row.connection_status = AccountConnectionStatus.connected
+            row.last_synced_at = datetime.now(timezone.utc)
+            row.meta = meta
+            return row
+        row = SocialAccount(
+            organization_id=organization_id,
+            client_id=client_id,
+            provider="whatsapp",
+            external_id=external_id,
+            name=name,
+            connection_status=AccountConnectionStatus.connected,
+            encrypted_credentials_ref=None,
+            meta=meta,
+            last_synced_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        await db.flush()
+        return row
 
 
 class MetaIntegration(MetaFamilyIntegration):

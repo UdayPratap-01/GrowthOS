@@ -7,7 +7,7 @@ import hmac
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -87,9 +87,72 @@ async def meta_webhook(
 
 
 @router.get("/meta")
-async def meta_verify(hub_mode: str | None = None, hub_verify_token: str | None = None, hub_challenge: str | None = None):
+async def meta_verify(
+    hub_mode: str | None = Query(default=None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
+):
     settings = get_settings()
     token = getattr(settings, "meta_webhook_verify_token", "") or ""
     if hub_mode == "subscribe" and token and hub_verify_token == token:
         return int(hub_challenge or 0)
     raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@router.get("/whatsapp")
+async def whatsapp_verify(
+    hub_mode: str | None = Query(default=None, alias="hub.mode"),
+    hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
+):
+    """
+    WhatsApp Cloud API webhook verification (Meta platform).
+
+    Production activation requires a public HTTPS callback URL registered in Meta.
+    Local verification succeeds only when META_WEBHOOK_VERIFY_TOKEN is configured.
+    """
+    settings = get_settings()
+    token = getattr(settings, "meta_webhook_verify_token", "") or ""
+    if hub_mode == "subscribe" and token and hub_verify_token == token:
+        return int(hub_challenge or 0)
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@router.post("/whatsapp", dependencies=[Depends(webhook_rate_limit)])
+async def whatsapp_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None),
+) -> dict:
+    """
+    Accept WhatsApp webhook events when signature-valid.
+
+    Inbound message handling is read-only / acknowledgment-only — no outbound sends.
+    Full production delivery requires public HTTPS (PENDING_PUBLIC_HTTPS).
+    """
+    settings = get_settings()
+    raw = await request.body()
+    secret = settings.meta_app_secret
+    if not secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CREDENTIALS REQUIRED")
+    if not _valid_signature(raw, x_hub_signature_256, secret):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Malformed JSON: {exc}") from exc
+
+    events.webhook_received(
+        provider="whatsapp",
+        event_id=None,
+        outcome="acknowledged",
+        detail="read_only_ack",
+    )
+    return {
+        "received": True,
+        "provider": "whatsapp",
+        "messaging_enabled": False,
+        "production_status": "PENDING_PUBLIC_HTTPS",
+        "object": payload.get("object"),
+        "entry_count": len(payload.get("entry") or []),
+    }

@@ -14,7 +14,7 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { api } from "@/lib/api";
 import { Client, IntegrationStatus } from "@/types";
 
-const PHASE3 = new Set(["meta", "instagram", "whatsapp", "google_analytics"]);
+const PHASE3 = new Set(["meta", "instagram", "whatsapp", "google_analytics", "google_search_console"]);
 const PHASE4 = new Set(["google_ads", "youtube"]);
 
 function IntegrationsInner() {

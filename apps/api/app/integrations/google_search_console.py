@@ -1,10 +1,9 @@
-"""Google Analytics 4 OAuth + Data API sync."""
+"""Google Search Console OAuth + read-only search analytics (development-safe)."""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import UUID
 
 import httpx
@@ -19,7 +18,7 @@ from app.integrations.base import (
     MarketingIntegration,
     SyncResult,
 )
-from app.integrations.google_oauth import ensure_access_token
+from app.integrations.google_oauth import GOOGLE_AUTH, ensure_access_token, exchange_code
 from app.integrations.oauth import decode_oauth_state, encode_oauth_state
 from app.integrations.persistence import (
     clear_integration_secrets,
@@ -27,18 +26,14 @@ from app.integrations.persistence import (
     mark_sync,
     upsert_integration,
 )
-from app.models.enums import DataSource
-from app.models.marketing import AnalyticsDaily
 
-GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
-GA_ADMIN = "https://analyticsadmin.googleapis.com/v1beta/accountSummaries"
-GA_DATA = "https://analyticsdata.googleapis.com/v1beta"
+GSC_API = "https://www.googleapis.com/webmasters/v3"
+GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
 
 
-class GoogleAnalyticsIntegration(MarketingIntegration):
-    provider = "google_analytics"
-    display_name = "Google Analytics"
+class GoogleSearchConsoleIntegration(MarketingIntegration):
+    provider = "google_search_console"
+    display_name = "Google Search Console"
 
     def credentials_configured(self) -> bool:
         settings = get_settings()
@@ -47,11 +42,13 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
     def _redirect_uri(self) -> str:
         settings = get_settings()
         return (
-            settings.google_redirect_uri
-            or f"{settings.api_public_url}/api/v1/integrations/google_analytics/callback"
+            settings.google_search_console_redirect_uri
+            or f"{settings.api_public_url}/api/v1/integrations/google_search_console/callback"
         )
 
-    async def get_connection_status(self, organization_id: UUID, client_id: UUID | None = None) -> ConnectionStatus:
+    async def get_connection_status(
+        self, organization_id: UUID, client_id: UUID | None = None
+    ) -> ConnectionStatus:
         db: AsyncSession = self._db  # type: ignore[attr-defined]
         row = await get_integration_row(
             db, organization_id=organization_id, provider=self.provider, client_id=client_id
@@ -62,7 +59,7 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
             return ConnectionStatus(
                 provider=self.provider,
                 status=IntegrationConnectionStatus.connected,
-                message="Google Analytics connected. Tokens stored encrypted server-side.",
+                message="Search Console connected. Read-only site and query data available.",
                 last_synced_at=cfg.get("last_synced_at"),
                 account_label=cfg.get("account_label"),
                 credentials_configured=configured,
@@ -75,6 +72,7 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
                 status=IntegrationConnectionStatus.sync_error,
                 message=cfg.get("last_sync_error") or "Last sync failed.",
                 last_synced_at=cfg.get("last_synced_at"),
+                account_label=cfg.get("account_label"),
                 credentials_configured=configured,
                 can_connect=False,
             )
@@ -83,16 +81,18 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
             return ConnectionStatus(
                 provider=self.provider,
                 status=IntegrationConnectionStatus.demo_data,
-                message="Demo analytics available. Live Google Analytics is not connected.",
+                message="Demo mode. Connect Search Console via Google OAuth for live SEO data.",
                 credentials_configured=configured,
                 can_connect=configured,
             )
         return ConnectionStatus(
             provider=self.provider,
             status=IntegrationConnectionStatus.not_connected,
-            message="Not connected. Configure GOOGLE_CLIENT_ID/SECRET and complete OAuth."
-            if not configured
-            else "Ready to connect Google Analytics.",
+            message=(
+                "Not connected. Configure GOOGLE_CLIENT_ID/SECRET and complete OAuth."
+                if not configured
+                else "Ready to connect Google Search Console (read-only)."
+            ),
             credentials_configured=configured,
             can_connect=configured,
         )
@@ -116,13 +116,7 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
             "client_id": settings.google_client_id,
             "redirect_uri": self._redirect_uri(),
             "response_type": "code",
-            "scope": " ".join(
-                [
-                    "https://www.googleapis.com/auth/analytics.readonly",
-                    "openid",
-                    "email",
-                ]
-            ),
+            "scope": " ".join([GSC_SCOPE, "openid", "email"]),
             "access_type": "offline",
             "prompt": "consent",
             "state": state,
@@ -130,12 +124,11 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
         return ConnectResult(
             provider=self.provider,
             authorize_url=f"{GOOGLE_AUTH}?{urlencode(params)}",
-            message="Redirect the user to Google to authorize Analytics access.",
+            message="Redirect the user to Google to authorize Search Console read access.",
         )
 
     async def handle_callback(self, *, code: str, state: str) -> dict:
         db: AsyncSession = self._db  # type: ignore[attr-defined]
-        settings = get_settings()
         try:
             payload = decode_oauth_state(state)
         except ValueError as exc:
@@ -143,41 +136,12 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
         if payload.get("provider") != self.provider:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider mismatch")
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            token_resp = await client.post(
-                GOOGLE_TOKEN,
-                data={
-                    "code": code,
-                    "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret,
-                    "redirect_uri": self._redirect_uri(),
-                    "grant_type": "authorization_code",
-                },
-            )
-            if token_resp.status_code >= 400:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Google token exchange failed: {token_resp.text}",
-                )
-            token_data = token_resp.json()
-            access_token = token_data.get("access_token")
-            if not access_token:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No Google access token returned")
-
-            accounts_resp = await client.get(
-                GA_ADMIN,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            account_label = "Google Analytics"
-            property_id = None
-            if accounts_resp.status_code < 400:
-                summaries = accounts_resp.json().get("accountSummaries") or []
-                if summaries:
-                    account_label = summaries[0].get("displayName") or account_label
-                    props = summaries[0].get("propertySummaries") or []
-                    if props:
-                        property_id = props[0].get("property")
-                        account_label = f"{account_label} / {props[0].get('displayName', property_id)}"
+        token_data = await exchange_code(code=code, redirect_uri=self._redirect_uri())
+        access_token = token_data["access_token"]
+        sites = await self._list_sites(access_token)
+        primary = sites[0] if sites else {}
+        site_url = primary.get("siteUrl") or ""
+        label = site_url or "Search Console"
 
         org_id = UUID(payload["organization_id"])
         client_id = UUID(payload["client_id"]) if payload.get("client_id") else None
@@ -188,8 +152,9 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
             client_id=client_id,
             status="connected",
             config={
-                "account_label": account_label,
-                "property_id": property_id,
+                "account_label": label,
+                "site_url": site_url,
+                "sites": sites[:25],
                 "connected_at": datetime.now(timezone.utc).isoformat(),
             },
             token_payload={
@@ -197,6 +162,7 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
                 "refresh_token": token_data.get("refresh_token"),
                 "expires_in": token_data.get("expires_in"),
                 "token_type": token_data.get("token_type", "Bearer"),
+                "obtained_at": datetime.now(timezone.utc).isoformat(),
                 "provider": self.provider,
             },
         )
@@ -204,7 +170,8 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
             "provider": self.provider,
             "organization_id": str(org_id),
             "client_id": str(client_id) if client_id else None,
-            "account_label": account_label,
+            "account_label": label,
+            "site_count": len(sites),
         }
 
     async def disconnect(self, organization_id: UUID, client_id: UUID | None = None) -> ConnectionStatus:
@@ -227,99 +194,99 @@ class GoogleAnalyticsIntegration(MarketingIntegration):
                 provider=self.provider,
                 success=False,
                 status=status_now.status,
-                message="Live sync requires a connected Google Analytics property.",
+                message="Live sync requires a connected Search Console property.",
                 errors=["not_connected"],
             )
-        property_id = (row.config or {}).get("property_id")
-        if not property_id:
-            await mark_sync(db, row, status="sync_error", error="No GA4 property selected")
+        site_url = (row.config or {}).get("site_url")
+        if not site_url:
+            await mark_sync(db, row, status="sync_error", error="No Search Console site selected")
             return SyncResult(
                 provider=self.provider,
                 success=False,
                 status=IntegrationConnectionStatus.sync_error,
-                message="No GA4 property available on the connected account.",
-                errors=["missing_property"],
+                message="No verified Search Console property on the connected account.",
+                errors=["missing_site"],
             )
         try:
             access_token = await ensure_access_token(
                 db, row, organization_id=organization_id, provider=self.provider, client_id=client_id
             )
-            records = await self._sync_ga4(db, organization_id, client_id, access_token, property_id)
-            await mark_sync(db, row, status="connected", records_synced=records)
+            sites = await self._list_sites(access_token)
+            analytics = await self._fetch_search_analytics(access_token, site_url)
+            cfg = dict(row.config or {})
+            cfg["sites"] = sites[:25]
+            cfg["last_search_analytics"] = analytics
+            cfg["analytics_synced_at"] = datetime.now(timezone.utc).isoformat()
+            row.config = cfg
+            await db.flush()
+            await mark_sync(db, row, status="connected", records_synced=len(analytics.get("rows") or []))
             return SyncResult(
                 provider=self.provider,
                 success=True,
                 status=IntegrationConnectionStatus.connected,
-                records_synced=records,
-                message=f"Synced {records} GA4 daily rows.",
+                records_synced=len(analytics.get("rows") or []),
+                message="Synced Search Console query/page analytics (read-only).",
             )
         except Exception as exc:
-            await mark_sync(db, row, status="sync_error", error=str(exc))
+            await mark_sync(db, row, status="sync_error", error=str(exc)[:300])
             return SyncResult(
                 provider=self.provider,
                 success=False,
                 status=IntegrationConnectionStatus.sync_error,
-                message="Google Analytics sync failed.",
-                errors=[str(exc)],
+                message="Search Console sync failed.",
+                errors=[type(exc).__name__],
             )
 
-    async def _sync_ga4(
-        self,
-        db: AsyncSession,
-        organization_id: UUID,
-        client_id: UUID | None,
-        access_token: str,
-        property_id: str,
-    ) -> int:
+    async def _list_sites(self, access_token: str) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{GSC_API}/sites",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Search Console sites list failed: HTTP {resp.status_code}")
+        return [
+            {"siteUrl": entry.get("siteUrl"), "permissionLevel": entry.get("permissionLevel")}
+            for entry in (resp.json().get("siteEntry") or [])
+            if entry.get("siteUrl")
+        ]
+
+    async def _fetch_search_analytics(self, access_token: str, site_url: str) -> dict:
         end = date.today()
-        start = end - timedelta(days=6)
+        start = end - timedelta(days=7)
         body = {
-            "dateRanges": [{"startDate": start.isoformat(), "endDate": end.isoformat()}],
-            "dimensions": [{"name": "date"}],
-            "metrics": [
-                {"name": "sessions"},
-                {"name": "conversions"},
-                {"name": "totalRevenue"},
-                {"name": "screenPageViews"},
-            ],
+            "startDate": start.isoformat(),
+            "endDate": end.isoformat(),
+            "dimensions": ["query", "page"],
+            "rowLimit": 25,
         }
+        encoded_site = quote(site_url, safe="")
         async with httpx.AsyncClient(timeout=45) as client:
             resp = await client.post(
-                f"{GA_DATA}/{property_id}:runReport",
-                headers={"Authorization": f"Bearer {access_token}"},
+                f"{GSC_API}/sites/{encoded_site}/searchAnalytics/query",
+                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
                 json=body,
             )
-            if resp.status_code >= 400:
-                raise RuntimeError(resp.text)
-            rows = resp.json().get("rows") or []
-            if not client_id:
-                return len(rows)
-            count = 0
-            for row in rows:
-                dims = row.get("dimensionValues") or []
-                mets = row.get("metricValues") or []
-                if not dims:
-                    continue
-                day = datetime.strptime(dims[0]["value"], "%Y%m%d").date()
-                sessions = int(float(mets[0]["value"])) if len(mets) > 0 else 0
-                conversions = int(float(mets[1]["value"])) if len(mets) > 1 else 0
-                revenue = Decimal(str(mets[2]["value"])) if len(mets) > 2 else Decimal("0")
-                views = int(float(mets[3]["value"])) if len(mets) > 3 else 0
-                db.add(
-                    AnalyticsDaily(
-                        organization_id=organization_id,
-                        client_id=client_id,
-                        date=day,
-                        spend=Decimal("0"),
-                        leads=conversions,
-                        revenue=revenue,
-                        impressions=views,
-                        clicks=sessions,
-                        conversions=conversions,
-                        metrics={"source": "ga4_live", "provider": "google_analytics"},
-                        data_source=DataSource.live,
-                    )
-                )
-                count += 1
-            await db.flush()
-            return count
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Search analytics query failed: HTTP {resp.status_code}")
+        data = resp.json()
+        rows = []
+        for row in data.get("rows") or []:
+            keys = row.get("keys") or []
+            rows.append(
+                {
+                    "query": keys[0] if len(keys) > 0 else None,
+                    "page": keys[1] if len(keys) > 1 else None,
+                    "clicks": row.get("clicks"),
+                    "impressions": row.get("impressions"),
+                    "ctr": row.get("ctr"),
+                    "position": row.get("position"),
+                }
+            )
+        return {
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "rows": rows,
+            "source": "search_console_api",
+            "note": "Read-only Search Console data; not fabricated.",
+        }

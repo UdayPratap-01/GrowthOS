@@ -35,6 +35,7 @@ async def test_integration_statuses_and_connect_without_credentials(no_provider_
         assert "google_analytics" in providers
         assert "google_ads" in providers
         assert "youtube" in providers
+        assert "google_search_console" in providers
         # Never fake Connected without OAuth
         assert providers["meta"]["status"] in {"demo_data", "not_connected"}
         assert providers["meta"]["status"] != "connected"

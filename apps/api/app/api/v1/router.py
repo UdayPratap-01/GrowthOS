@@ -21,6 +21,7 @@ from app.api.v1 import (
     operator,
     recommendations,
     reports,
+    seo,
     strategies,
     webhooks,
 )
@@ -34,6 +35,7 @@ api_router.include_router(content.router)
 api_router.include_router(leads.router)
 api_router.include_router(assistant.router)
 api_router.include_router(integrations.router)
+api_router.include_router(seo.router)
 api_router.include_router(analytics.router)
 api_router.include_router(campaigns.router)
 api_router.include_router(campaign_generation.router)

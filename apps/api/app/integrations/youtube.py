@@ -292,17 +292,34 @@ class YouTubeIntegration(MarketingIntegration):
 
             views_recent = 0
             likes_recent = 0
+            video_metadata: list[dict] = []
             if video_ids:
                 vids_resp = await client.get(
                     f"{YT_API}/videos",
-                    params={"part": "statistics", "id": ",".join(video_ids)},
+                    params={
+                        "part": "snippet,statistics,contentDetails",
+                        "id": ",".join(video_ids),
+                    },
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 if vids_resp.status_code < 400:
                     for v in vids_resp.json().get("items") or []:
                         stats = v.get("statistics") or {}
+                        snippet = v.get("snippet") or {}
+                        content = v.get("contentDetails") or {}
                         views_recent += int(stats.get("viewCount") or 0)
                         likes_recent += int(stats.get("likeCount") or 0)
+                        video_metadata.append(
+                            {
+                                "id": v.get("id"),
+                                "title": snippet.get("title"),
+                                "published_at": snippet.get("publishedAt"),
+                                "duration": content.get("duration"),
+                                "view_count": int(stats.get("viewCount") or 0),
+                                "like_count": int(stats.get("likeCount") or 0),
+                                "comment_count": int(stats.get("commentCount") or 0),
+                            }
+                        )
 
         if not client_id:
             return 1
@@ -310,6 +327,21 @@ class YouTubeIntegration(MarketingIntegration):
         ch = channels[0]
         stats = ch.get("statistics") or {}
         title = (ch.get("snippet") or {}).get("title") or "YouTube"
+
+        row = await get_integration_row(
+            db, organization_id=organization_id, provider=self.provider, client_id=client_id
+        )
+        if row:
+            cfg = dict(row.config or {})
+            cfg["recent_videos"] = video_metadata[:25]
+            cfg["channel_stats"] = {
+                "subscriber_count": int(stats.get("subscriberCount") or 0),
+                "video_count": int(stats.get("videoCount") or 0),
+                "view_count": int(stats.get("viewCount") or 0),
+            }
+            row.config = cfg
+            await db.flush()
+
         await self._upsert_social_account(
             db,
             organization_id=organization_id,

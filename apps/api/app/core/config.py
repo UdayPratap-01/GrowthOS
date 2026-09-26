@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     # Phase 4 — YouTube
     youtube_redirect_uri: str = ""
 
+    # SEO — Google Search Console (read-only; shares Google OAuth client)
+    google_search_console_redirect_uri: str = ""
+
     # Media generation — none | demo | openai (images); none | demo | replicate (videos)
     image_provider: str = "none"
     image_api_key: str = ""
