@@ -136,6 +136,23 @@ class Settings(BaseSettings):
     # SEO — Google Search Console (read-only; shares Google OAuth client)
     google_search_console_redirect_uri: str = ""
 
+    # SEO crawl — read-only full-site crawler (M9.1)
+    seo_crawl_rate_limit_per_hour: int = 10
+    seo_crawl_max_pages_default: int = 50
+    seo_crawl_max_pages_hard: int = 500
+    seo_crawl_max_depth_default: int = 3
+    seo_crawl_max_depth_hard: int = 10
+    seo_crawl_request_timeout_default: float = 15.0
+    seo_crawl_request_timeout_hard: float = 30.0
+    seo_crawl_max_response_bytes_default: int = 1_048_576
+    seo_crawl_max_response_bytes_hard: int = 2_097_152
+    seo_crawl_request_delay_default: float = 0.25
+    seo_crawl_request_delay_hard: float = 2.0
+    seo_crawl_max_duration_seconds: float = 600.0
+    seo_crawl_max_redirects: int = 5
+    seo_crawl_max_url_length: int = 2048
+    seo_crawl_max_queue_size: int = 2000
+
     # Media generation — none | demo | openai (images); none | demo | replicate (videos)
     image_provider: str = "none"
     image_api_key: str = ""

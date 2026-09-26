@@ -1,66 +1,17 @@
-"""Technical SEO audit — crawl observations only; never claims index status without GSC data."""
+"""Technical SEO audit — single-page crawl observations."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 
-
-class _HeadParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.title: str | None = None
-        self.meta_description: str | None = None
-        self.canonical: str | None = None
-        self.robots: str | None = None
-        self.h1: list[str] = []
-        self.h2: list[str] = []
-        self.images_missing_alt = 0
-        self.images_total = 0
-        self._in_title = False
-        self._current_heading: str | None = None
-        self._heading_buffer: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr = {k: (v or "") for k, v in attrs}
-        if tag == "title":
-            self._in_title = True
-        elif tag == "meta":
-            name = (attr.get("name") or attr.get("property") or "").lower()
-            if name == "description":
-                self.meta_description = attr.get("content") or self.meta_description
-            if name == "robots":
-                self.robots = attr.get("content") or self.robots
-        elif tag == "link" and (attr.get("rel") or "").lower() == "canonical":
-            self.canonical = attr.get("href") or self.canonical
-        elif tag in {"h1", "h2"}:
-            self._current_heading = tag
-            self._heading_buffer = []
-        elif tag == "img":
-            self.images_total += 1
-            if not (attr.get("alt") or "").strip():
-                self.images_missing_alt += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "title":
-            self._in_title = False
-        elif tag in {"h1", "h2"} and self._current_heading == tag:
-            text = " ".join(self._heading_buffer).strip()
-            if text:
-                (self.h1 if tag == "h1" else self.h2).append(text)
-            self._current_heading = None
-            self._heading_buffer = []
-
-    def handle_data(self, data: str) -> None:
-        if self._in_title:
-            self.title = (self.title or "") + data
-        elif self._current_heading:
-            self._heading_buffer.append(data.strip())
+from app.seo.fetcher import SafeFetcher
+from app.seo.normalize import normalize_url
+from app.seo.parser import PageParser, count_structured_data_blocks
+from app.seo.ssrf import SsrfError, validate_url_target
 
 
 @dataclass
@@ -88,71 +39,60 @@ class SeoAuditResult:
 
 
 async def run_technical_seo_audit(url: str, *, timeout: float = 20.0) -> SeoAuditResult:
+    normalized = normalize_url(url)
     result = SeoAuditResult(url=url, http_status=None)
     result.data_sources.append("http_crawl")
 
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if not normalized:
         result.errors.append("Invalid URL — must be http(s) with a host")
         return result
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"User-Agent": "GrowthOS-SEO-Audit/1.0"})
-        result.http_status = resp.status_code
-        if resp.status_code >= 400:
-            result.errors.append(f"Page returned HTTP {resp.status_code}")
-            return result
+        await validate_url_target(normalized)
+    except SsrfError as exc:
+        result.errors.append(exc.code)
+        return result
 
-        parser = _HeadParser()
-        parser.feed(resp.text[:500_000])
+    fetcher = SafeFetcher(timeout=timeout, max_response_bytes=1_048_576, max_redirects=5)
+    fetch = await fetcher.fetch(normalized)
+    result.http_status = fetch.status_code
+    if fetch.error_code:
+        result.errors.append(fetch.error_code)
+        return result
+    if (fetch.status_code or 500) >= 400:
+        result.errors.append(f"Page returned HTTP {fetch.status_code}")
+        return result
 
-        sitemap_url = urljoin(url, "/sitemap.xml")
-        sitemap_ok = False
-        try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                sm = await client.head(sitemap_url)
-                sitemap_ok = sm.status_code < 400
-        except Exception:
-            sitemap_ok = False
+    text = fetch.body.decode("utf-8", errors="replace")[:500_000]
+    parser = PageParser(page_url=fetch.final_url or normalized, root_url=normalized)
+    parser.feed(text)
+    observations = parser.observations()
+    sitemap_url = urljoin(normalized, "/sitemap.xml")
+    sitemap_fetch = await fetcher.head(sitemap_url)
+    sitemap_ok = (sitemap_fetch.status_code or 500) < 400 and not sitemap_fetch.error_code
 
-        structured_data_count = len(re.findall(r"application/ld\+json", resp.text, re.I))
+    result.observations = {
+        "final_url": fetch.final_url,
+        **observations,
+        "sitemap_present": sitemap_ok,
+        "structured_data_blocks": count_structured_data_blocks(text),
+    }
 
-        result.observations = {
-            "final_url": str(resp.url),
-            "title": (parser.title or "").strip() or None,
-            "meta_description": parser.meta_description,
-            "canonical": parser.canonical,
-            "robots_meta": parser.robots,
-            "h1_count": len(parser.h1),
-            "h1_text": parser.h1[:5],
-            "h2_count": len(parser.h2),
-            "images_total": parser.images_total,
-            "images_missing_alt": parser.images_missing_alt,
-            "sitemap_present": sitemap_ok,
-            "structured_data_blocks": structured_data_count,
-        }
-
-        if not parser.title:
-            result.recommendations.append("Add a unique page title.")
-        if not parser.meta_description:
-            result.recommendations.append("Add a meta description.")
-        if not parser.h1:
-            result.recommendations.append("Add at least one H1 heading.")
-        if parser.images_missing_alt:
-            result.recommendations.append(
-                f"Add alt text to {parser.images_missing_alt} image(s) missing alt attributes."
-            )
-        if not sitemap_ok:
-            result.recommendations.append("No sitemap.xml detected at site root — verify sitemap coverage.")
-        if parser.robots and "noindex" in parser.robots.lower():
-            result.recommendations.append(
-                "Robots meta contains noindex — page may be excluded from indexing (crawl observation only)."
-            )
-
-    except httpx.TimeoutException:
-        result.errors.append("Request timed out")
-    except httpx.HTTPError as exc:
-        result.errors.append(f"Fetch failed: {type(exc).__name__}")
+    if not observations.get("title"):
+        result.recommendations.append("Add a unique page title.")
+    if not observations.get("meta_description"):
+        result.recommendations.append("Add a meta description.")
+    if not observations.get("h1_count"):
+        result.recommendations.append("Add at least one H1 heading.")
+    if observations.get("images_missing_alt"):
+        result.recommendations.append(
+            f"Add alt text to {observations['images_missing_alt']} image(s) missing alt attributes."
+        )
+    if not sitemap_ok:
+        result.recommendations.append("No sitemap.xml detected at site root — verify sitemap coverage.")
+    if observations.get("robots_meta") and "noindex" in str(observations["robots_meta"]).lower():
+        result.recommendations.append(
+            "Robots meta contains noindex — page may be excluded from indexing (crawl observation only)."
+        )
 
     return result

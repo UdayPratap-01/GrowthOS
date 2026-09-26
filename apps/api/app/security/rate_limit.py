@@ -224,6 +224,7 @@ def policies() -> dict[str, RateLimitPolicy]:
             "campaign_generation", s.campaign_generation_rate_limit_per_hour, 3600
         ),
         "webhook": RateLimitPolicy("webhook", s.webhook_rate_limit_per_minute, 60),
+        "seo_crawl": RateLimitPolicy("seo_crawl", s.seo_crawl_rate_limit_per_hour, 3600),
     }
 
 

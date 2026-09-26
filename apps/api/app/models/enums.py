@@ -115,6 +115,14 @@ class RiskLevel(str, enum.Enum):
     critical = "critical"
 
 
+class SeoCrawlStatus(str, enum.Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 class JobStatus(str, enum.Enum):
     queued = "queued"
     submitted = "submitted"

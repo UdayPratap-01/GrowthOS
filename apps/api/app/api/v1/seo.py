@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import AuthContext, get_current_auth
 from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
+from app.schemas.seo_crawl import SeoCrawlCreateRequest, SeoCrawlOut, SeoCrawlPageOut
+from app.security.limits import seo_crawl_limit
+from app.services.seo_crawl_service import SeoCrawlService
 from app.integrations.base import IntegrationConnectionStatus
 from app.integrations.persistence import get_integration_row
 from app.integrations.registry import get_integration
@@ -36,6 +39,64 @@ async def seo_audit(
     """Run a technical SEO audit on a URL (crawl observations — not index verification)."""
     result = await run_technical_seo_audit(str(body.url))
     return result.as_dict()
+
+
+@router.post("/crawls", response_model=SeoCrawlOut, status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(seo_crawl_limit)])
+async def create_seo_crawl(
+    body: SeoCrawlCreateRequest,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> SeoCrawlOut:
+    """Queue a read-only full-site SEO crawl (async job)."""
+    crawl = await SeoCrawlService(db).create_crawl(
+        organization_id=auth.organization_id,
+        user_id=auth.user_id,
+        client_id=body.client_id,
+        root_url=str(body.root_url),
+        config={
+            "max_pages": body.max_pages,
+            "max_depth": body.max_depth,
+            "request_timeout": body.request_timeout,
+            "include_subdomains": body.include_subdomains,
+        },
+    )
+    await db.commit()
+    return SeoCrawlOut.model_validate(crawl)
+
+
+@router.get("/crawls/{crawl_id}", response_model=SeoCrawlOut)
+async def get_seo_crawl(
+    crawl_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoCrawlOut:
+    crawl = await SeoCrawlService(db).get_crawl(organization_id=auth.organization_id, crawl_id=crawl_id)
+    return SeoCrawlOut.model_validate(crawl)
+
+
+@router.get("/crawls/{crawl_id}/pages", response_model=list[SeoCrawlPageOut])
+async def list_seo_crawl_pages(
+    crawl_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> list[SeoCrawlPageOut]:
+    pages = await SeoCrawlService(db).list_pages(
+        organization_id=auth.organization_id, crawl_id=crawl_id, limit=limit, offset=offset
+    )
+    return [SeoCrawlPageOut.model_validate(page) for page in pages]
+
+
+@router.post("/crawls/{crawl_id}/cancel", response_model=SeoCrawlOut)
+async def cancel_seo_crawl(
+    crawl_id: UUID,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> SeoCrawlOut:
+    crawl = await SeoCrawlService(db).cancel_crawl(organization_id=auth.organization_id, crawl_id=crawl_id)
+    await db.commit()
+    return SeoCrawlOut.model_validate(crawl)
 
 
 @router.get("/integrations/{provider}/capabilities")

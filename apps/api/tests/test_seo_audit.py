@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.seo.audit import run_technical_seo_audit
+from app.seo.fetcher import FetchResult
 
 
 @pytest.mark.asyncio
@@ -16,34 +17,46 @@ async def test_seo_audit_invalid_url():
 
 @pytest.mark.asyncio
 async def test_seo_audit_extracts_title_and_disclaimer(monkeypatch):
-    class FakeResp:
-        status_code = 200
-        url = "https://example.com/"
-        text = """
-        <html><head>
-        <title>Example Site</title>
-        <meta name="description" content="A demo page">
-        <link rel="canonical" href="https://example.com/">
-        </head><body><h1>Hello</h1><img src="x.png"></body></html>
-        """
+    html = """
+    <html><head>
+    <title>Example Site</title>
+    <meta name="description" content="A demo page">
+    <link rel="canonical" href="https://example.com/">
+    </head><body><h1>Hello</h1><img src="x.png"></body></html>
+    """
 
-    class FakeClient:
-        async def get(self, url, **kwargs):
-            return FakeResp()
+    async def fake_validate(url: str) -> None:
+        return None
 
-        async def head(self, url, **kwargs):
-            class HeadResp:
-                status_code = 200
+    async def fake_fetch(url: str) -> FetchResult:
+        if url.endswith("sitemap.xml"):
+            return FetchResult(
+                requested_url=url,
+                final_url=url,
+                status_code=200,
+                content_type="application/xml",
+                body=b"<urlset></urlset>",
+                response_bytes=13,
+                redirect_count=0,
+                response_time_ms=1.0,
+            )
+        return FetchResult(
+            requested_url=url,
+            final_url=url,
+            status_code=200,
+            content_type="text/html",
+            body=html.encode(),
+            response_bytes=len(html),
+            redirect_count=0,
+            response_time_ms=2.0,
+        )
 
-            return HeadResp()
+    class FakeFetcher:
+        fetch = staticmethod(fake_fetch)
+        head = staticmethod(fake_fetch)
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return None
-
-    monkeypatch.setattr("app.seo.audit.httpx.AsyncClient", lambda **kw: FakeClient())
+    monkeypatch.setattr("app.seo.audit.validate_url_target", fake_validate)
+    monkeypatch.setattr("app.seo.audit.SafeFetcher", lambda **kw: FakeFetcher())
     result = await run_technical_seo_audit("https://example.com")
     assert result.http_status == 200
     assert result.observations["title"] == "Example Site"
