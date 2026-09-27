@@ -19,7 +19,8 @@ out/
 dist/
 build/
 coverage/
-storage/
+/storage/
+!apps/api/app/storage/
 storage_test_media/
 storage_test_media_unit/
 storage_test_campaign/
