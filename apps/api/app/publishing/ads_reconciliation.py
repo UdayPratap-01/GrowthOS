@@ -377,15 +377,10 @@ class AdsReconciler:
             FROM campaign
             WHERE campaign.id = {campaign_id}
         """
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token or "",
-            "Content-Type": "application/json",
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
+        from app.integrations.google_ads_api import google_ads_headers, google_ads_url
 
-        url = f"https://googleads.googleapis.com/v18/customers/{customer_clean}/googleAds:search"
+        headers = google_ads_headers(access_token)
+        url = google_ads_url(f"/customers/{customer_clean}/googleAds:search")
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(url, headers=headers, json={"query": query})

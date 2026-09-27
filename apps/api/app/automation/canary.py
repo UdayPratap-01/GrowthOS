@@ -454,7 +454,9 @@ async def evaluate_canary_gate(
             "resume" if atype == AIActionType.resume_campaign else "update_budget"
         )
     else:
-        creds = bool(cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token)
+        from app.integrations.google_ads_api import google_oauth_configured
+
+        creds = google_oauth_configured(cfg)
         matrix = google_ads_capabilities(connected=connected, credentials_configured=creds)
         op = "pause" if atype == AIActionType.pause_campaign else (
             "resume" if atype == AIActionType.resume_campaign else "update_budget"

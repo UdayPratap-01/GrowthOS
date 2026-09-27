@@ -68,6 +68,12 @@ def test_classify_google_ads_errors():
     code, cat = classify_google_ads_error(status_code=404, body={"error": {"status": "NOT_FOUND"}})
     assert code == "TARGET_NOT_FOUND"
 
+    code, cat = classify_google_ads_error(
+        status_code=403,
+        body={"error": {"message": "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION"}},
+    )
+    assert code == "AUTHORIZATION_ERROR"
+
 
 def test_build_google_connection_config():
     cfg = build_google_connection_config(

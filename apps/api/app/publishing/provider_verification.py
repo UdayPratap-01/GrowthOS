@@ -18,6 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.automation.idempotency import sanitize_platform_response
 from app.core.config import Settings, get_settings
+from app.integrations.google_ads_api import (
+    GOOGLE_ADS_API_BASE,
+    google_ads_headers,
+    google_ads_url,
+    google_oauth_configured,
+)
 from app.integrations.google_oauth import ensure_access_token
 from app.integrations.meta_family import META_GRAPH
 from app.integrations.persistence import get_integration_row, load_tokens
@@ -37,7 +43,7 @@ CONFIRM_PHRASE = "I_CONFIRM_LIVE_MUTATIONS"
 READ_ONLY_CONFIRM_PHRASE = "I_CONFIRM_READ_ONLY_PROVIDER_VERIFICATION"
 
 META_GRAPH_VERSIONED = META_GRAPH
-GOOGLE_ADS_API = "https://googleads.googleapis.com/v18"
+GOOGLE_ADS_API = GOOGLE_ADS_API_BASE
 
 
 class AsyncHttpClient(Protocol):
@@ -985,15 +991,10 @@ async def _verify_google_readonly(
             report.checks.extend([s.as_dict() for s in report.steps])
             return report
 
-    headers = {
-        "Authorization": f"Bearer {access}",
-        "developer-token": settings.google_ads_developer_token,
-    }
-    if settings.google_ads_login_customer_id:
-        headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
+    headers = google_ads_headers(access, content_type=False, settings=settings)
 
     try:
-        resp = await http_client.get(f"{GOOGLE_ADS_API}/customers:listAccessibleCustomers", headers=headers)
+        resp = await http_client.get(google_ads_url("/customers:listAccessibleCustomers"), headers=headers)
     except httpx.TimeoutException:
         report.error_category = VerificationErrorCategory.timeout.value
         report.authentication = {"status": "PROVIDER_UNAVAILABLE"}
@@ -1031,7 +1032,7 @@ async def _verify_google_readonly(
         VerificationStepResult(
             "authentication",
             True,
-            "Google Ads API accepted developer token + OAuth",
+            "Google Ads API accepted OAuth credentials",
             observed={"accessible_customers": len(names)},
         )
     )
@@ -1084,11 +1085,11 @@ async def _verify_google_readonly(
     ]
     campaigns: list[dict[str, Any]] = []
     # Read-only GAQL: campaign discovery for canary allowlists
-    search_headers = {**headers, "Content-Type": "application/json"}
+    search_headers = google_ads_headers(access, settings=settings)
     query = "SELECT campaign.id, campaign.name, campaign.status FROM campaign LIMIT 25"
     try:
         search = await http_client.post(
-            f"{GOOGLE_ADS_API}/customers/{customer_id}/googleAds:search",
+            google_ads_url(f"/customers/{customer_id}/googleAds:search"),
             headers=search_headers,
             json={"query": query},
         )
@@ -1195,11 +1196,7 @@ async def verify_google_campaign_ops(*, dry_run: bool = True) -> VerificationRep
             skipped_reason="PROVIDER_VERIFICATION_GOOGLE_CAMPAIGN_ID required",
             status="BLOCKED",
         )
-    if not (
-        settings.google_client_id
-        and settings.google_client_secret
-        and settings.google_ads_developer_token
-    ):
+    if not google_oauth_configured(settings):
         return VerificationReport(
             provider="google",
             ran=False,

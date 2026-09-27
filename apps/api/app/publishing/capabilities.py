@@ -93,7 +93,7 @@ def google_ads_capabilities(*, connected: bool, credentials_configured: bool) ->
     caps: list[ProviderCapability] = []
     if not credentials_configured:
         base = CapabilityStatus.not_configured
-        msg = "Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_ADS_DEVELOPER_TOKEN."
+        msg = "Configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
     elif not connected:
         base = CapabilityStatus.not_connected
         msg = "Connect Google Ads via OAuth."

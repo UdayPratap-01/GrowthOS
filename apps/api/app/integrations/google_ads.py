@@ -20,6 +20,15 @@ from app.integrations.base import (
     MarketingIntegration,
     SyncResult,
 )
+from app.integrations.google_ads_api import (
+    ADS_SCOPE,
+    google_ads_api_ready,
+    google_ads_headers,
+    google_ads_url,
+    google_oauth_configured,
+    list_accessible_customers,
+    safe_google_ads_error,
+)
 from app.integrations.google_oauth import GOOGLE_AUTH, ensure_access_token, exchange_code
 from app.integrations.oauth import decode_oauth_state, encode_oauth_state
 from app.integrations.persistence import (
@@ -32,21 +41,13 @@ from app.models.enums import ConnectionStatus as ModelConnectionStatus
 from app.models.enums import DataSource
 from app.models.marketing import AdAccount, AnalyticsCampaign, AnalyticsDaily, Campaign
 
-ADS_API = "https://googleads.googleapis.com/v18"
-ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
-
-
 class GoogleAdsIntegration(MarketingIntegration):
     provider = "google_ads"
     display_name = "Google Ads"
 
     def credentials_configured(self) -> bool:
-        settings = get_settings()
-        return bool(
-            settings.google_client_id
-            and settings.google_client_secret
-            and settings.google_ads_developer_token
-        )
+        """OAuth client credentials — sufficient to connect Google Ads (M9.18)."""
+        return google_oauth_configured()
 
     def _redirect_uri(self) -> str:
         settings = get_settings()
@@ -96,7 +97,7 @@ class GoogleAdsIntegration(MarketingIntegration):
             provider=self.provider,
             status=IntegrationConnectionStatus.not_connected,
             message=(
-                "Not connected. Set GOOGLE_CLIENT_ID/SECRET and GOOGLE_ADS_DEVELOPER_TOKEN."
+                "Not connected. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
                 if not configured
                 else "Ready to connect Google Ads."
             ),
@@ -111,8 +112,7 @@ class GoogleAdsIntegration(MarketingIntegration):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Google Ads credentials not configured. Set GOOGLE_CLIENT_ID, "
-                    "GOOGLE_CLIENT_SECRET, and GOOGLE_ADS_DEVELOPER_TOKEN."
+                    "Google Ads OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
                 ),
             )
         settings = get_settings()
@@ -166,7 +166,7 @@ class GoogleAdsIntegration(MarketingIntegration):
         preferred = (settings.google_ads_login_customer_id or "").replace("-", "") or None
         config = build_google_connection_config(customers=customers, preferred_customer_id=preferred)
         if not customers:
-            # Preserve prior soft-fail labeling when discovery fails (e.g. unapproved developer token).
+            # Preserve prior soft-fail labeling when discovery fails (e.g. Cloud project access pending).
             customer_id, account_label = await self._resolve_customer(access_token)
             config["customer_id"] = customer_id
             config["external_account_id"] = customer_id
@@ -229,14 +229,14 @@ class GoogleAdsIntegration(MarketingIntegration):
                 message="Live sync requires a connected Google Ads account.",
                 errors=["not_connected"],
             )
-        if not self.credentials_configured():
-            await mark_sync(db, row, status="sync_error", error="Developer token missing")
+        if not google_ads_api_ready():
+            await mark_sync(db, row, status="sync_error", error="Google OAuth not configured")
             return SyncResult(
                 provider=self.provider,
                 success=False,
                 status=IntegrationConnectionStatus.sync_error,
-                message="GOOGLE_ADS_DEVELOPER_TOKEN is required for live Ads API calls.",
-                errors=["missing_developer_token"],
+                message="Google OAuth client credentials are required for live Ads API calls.",
+                errors=["missing_oauth_config"],
             )
         customer_id = (row.config or {}).get("customer_id")
         if not customer_id:
@@ -272,19 +272,11 @@ class GoogleAdsIntegration(MarketingIntegration):
             )
 
     async def _resolve_customer(self, access_token: str) -> tuple[str | None, str]:
-        settings = get_settings()
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token,
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{ADS_API}/customers:listAccessibleCustomers", headers=headers)
-        if resp.status_code >= 400:
-            # OAuth succeeded; account discovery can fail until developer token is approved.
+        try:
+            names = await list_accessible_customers(access_token)
+        except RuntimeError:
+            # OAuth succeeded; account discovery can fail until Cloud project access is approved.
             return None, "Google Ads (pending customer discovery)"
-        names = resp.json().get("resourceNames") or []
         if not names:
             return None, "Google Ads (no accessible customers)"
         customer_id = str(names[0]).split("/")[-1]
@@ -298,14 +290,7 @@ class GoogleAdsIntegration(MarketingIntegration):
         access_token: str,
         customer_id: str,
     ) -> int:
-        settings = get_settings()
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token,
-            "Content-Type": "application/json",
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
+        headers = google_ads_headers(access_token)
 
         query = """
             SELECT
@@ -323,12 +308,12 @@ class GoogleAdsIntegration(MarketingIntegration):
         """
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{ADS_API}/customers/{customer_id}/googleAds:search",
+                google_ads_url(f"/customers/{customer_id}/googleAds:search"),
                 headers=headers,
                 json={"query": query},
             )
             if resp.status_code >= 400:
-                raise RuntimeError(resp.text)
+                raise RuntimeError(safe_google_ads_error(resp.text))
             results = resp.json().get("results") or []
 
         if not client_id:

@@ -438,7 +438,7 @@ async def provider_capabilities(
             google_ads_capabilities(
                 connected=google_connected,
                 credentials_configured=bool(
-                    settings.google_client_id and settings.google_client_secret and settings.google_ads_developer_token
+                    settings.google_client_id and settings.google_client_secret
                 ),
             ).as_dict(),
             instagram_publish_capabilities(connected=ig_connected).as_dict(),

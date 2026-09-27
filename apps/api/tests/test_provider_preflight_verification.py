@@ -151,7 +151,7 @@ async def test_preflight_partial_and_connected(monkeypatch):
             db, organization_id=org_id, provider="google_ads", client_id=client_id
         )
     assert meta.status == PreflightStatus.partially_configured
-    assert google.status == PreflightStatus.partially_configured
+    assert google.status == PreflightStatus.configured
 
 
 @pytest.mark.asyncio

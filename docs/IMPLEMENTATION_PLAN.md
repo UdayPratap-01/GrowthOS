@@ -115,5 +115,5 @@
 
 ### Honesty rules
 - Never mark Connected without OAuth + `secret_ref`
-- Google Ads `can_connect` requires `GOOGLE_ADS_DEVELOPER_TOKEN`
+- Google Ads `can_connect` requires `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` (M9.18)
 - Empty API responses do not invent metrics

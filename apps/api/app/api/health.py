@@ -194,11 +194,7 @@ def _operational_status(settings) -> dict:
         return "HEALTHY"
 
     meta_cfg = bool(settings.meta_app_id and settings.meta_app_secret)
-    google_cfg = bool(
-        settings.google_client_id
-        and settings.google_client_secret
-        and settings.google_ads_developer_token
-    )
+    google_cfg = bool(settings.google_client_id and settings.google_client_secret)
     # Provider verification health is configuration presence only — never implies
     # autonomous execution. Missing credentials in demo/dev is NOT_CONFIGURED, not FAILED.
     # CONFIGURED means app credentials are present — never implies live OAuth

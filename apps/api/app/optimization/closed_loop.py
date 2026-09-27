@@ -587,7 +587,6 @@ class ClosedLoopOptimizer:
             credentials_configured = bool(
                 settings.google_client_id
                 and settings.google_client_secret
-                and settings.google_ads_developer_token
             )
         else:
             credentials_configured = False

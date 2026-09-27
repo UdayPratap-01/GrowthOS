@@ -28,7 +28,7 @@ Shared Google OAuth (Analytics, Ads, YouTube, Search Console):
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_ADS_DEVELOPER_TOKEN` (Google Ads only)
+- `GOOGLE_ADS_DEVELOPER_TOKEN` (optional for Google Ads since Sept 2026)
 - `GOOGLE_ADS_REDIRECT_URI` (optional override)
 - `YOUTUBE_REDIRECT_URI` (optional override)
 - `GOOGLE_SEARCH_CONSOLE_REDIRECT_URI` (optional override)

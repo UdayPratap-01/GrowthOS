@@ -20,11 +20,15 @@ from app.analytics.errors import (
     ProviderTransportError,
 )
 from app.analytics.normalize import NormalizedPerformanceRow
-from app.core.config import get_settings
+from app.integrations.google_ads_api import (
+    google_ads_api_ready,
+    google_ads_headers,
+    google_ads_url,
+    list_accessible_customers,
+    safe_google_ads_error,
+)
 from app.integrations.google_oauth import ensure_access_token
 from app.integrations.persistence import get_integration_row
-
-ADS_API = "https://googleads.googleapis.com/v18"
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -133,9 +137,8 @@ class GoogleAdsInsightsFetcher:
         if row.status != "connected" or not row.secret_ref:
             raise IntegrationDisconnected("Google Ads integration is not connected")
 
-        settings = get_settings()
-        if not settings.google_ads_developer_token:
-            raise CredentialsMissing("GOOGLE_ADS_DEVELOPER_TOKEN is not configured")
+        if not google_ads_api_ready():
+            raise CredentialsMissing("Google OAuth client credentials are not configured")
 
         try:
             access_token = await ensure_access_token(
@@ -178,15 +181,8 @@ class GoogleAdsInsightsFetcher:
             WHERE segments.date BETWEEN '{start.isoformat()}' AND '{end.isoformat()}'
         """
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token or "",
-            "Content-Type": "application/json",
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
-
-        url = f"{ADS_API}/customers/{customer_clean}/googleAds:search"
+        headers = google_ads_headers(access_token)
+        url = google_ads_url(f"/customers/{customer_clean}/googleAds:search")
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(url, headers=headers, json={"query": query})
@@ -230,32 +226,17 @@ class GoogleAdsInsightsFetcher:
         return rows
 
     async def _discover_customer(self, access_token: str) -> str:
-        settings = get_settings()
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token or "",
-            "Content-Type": "application/json",
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(f"{ADS_API}/customers:listAccessibleCustomers", headers=headers)
+            names = await list_accessible_customers(access_token)
+        except RuntimeError as exc:
+            message = safe_google_ads_error(str(exc)).lower()
+            if "429" in message or "rate limit" in message or "resource_exhausted" in message:
+                raise ProviderRateLimited("Google Ads rate limited during discovery") from exc
+            raise ProviderTransportError(safe_google_ads_error(str(exc))) from exc
         except httpx.TimeoutException as exc:
             raise ProviderTimeout("Google Ads customer discovery timed out") from exc
         except httpx.HTTPError as exc:
             raise ProviderTransportError(f"Google Ads customer discovery failed: {str(exc)[:200]}") from exc
-        if resp.status_code in {401, 403}:
-            raise CredentialsExpired("Google Ads credentials rejected during discovery")
-        if resp.status_code == 429:
-            raise ProviderRateLimited("Google Ads rate limited during discovery")
-        if resp.status_code >= 400:
-            raise ProviderTransportError(f"Google Ads discovery HTTP {resp.status_code}")
-        try:
-            body = resp.json()
-        except ValueError as exc:
-            raise MalformedProviderResponse("Google Ads discovery response was not JSON") from exc
-        names = (body or {}).get("resourceNames") or []
         if not names:
             raise CredentialsMissing("Google Ads has no accessible customers")
         return str(names[0]).split("/")[-1]

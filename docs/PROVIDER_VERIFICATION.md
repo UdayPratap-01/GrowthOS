@@ -102,7 +102,7 @@ Allowlists + confirm phrase only; never enable unrestricted autonomy after a suc
 
 | Item | Detail |
 |------|--------|
-| Env | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN` |
+| Env | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (optional `GOOGLE_ADS_DEVELOPER_TOKEN`) |
 | Optional | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (MCC), `GOOGLE_ADS_REDIRECT_URI` |
 | Scope | `https://www.googleapis.com/auth/adwords` + `openid` + `email` |
 | Storage | Encrypted Fernet blob; refresh_token + access_token |
@@ -134,7 +134,7 @@ curl -X POST "$API/api/v1/autopilot/operator/providers/meta/verify" \
 
 ### Google Ads requirements
 
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_ADS_DEVELOPER_TOKEN`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (optional `GOOGLE_ADS_DEVELOPER_TOKEN`)
 - Optional `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (MCC)
 - Connected Google Ads OAuth + accessible customer
 

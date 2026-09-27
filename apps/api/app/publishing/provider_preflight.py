@@ -150,8 +150,10 @@ async def run_provider_preflight(
         checks.append(
             PreflightCheck(
                 "google_ads_developer_token",
-                CheckStatus.pass_ if dtok else CheckStatus.fail,
-                "GOOGLE_ADS_DEVELOPER_TOKEN set" if dtok else "GOOGLE_ADS_DEVELOPER_TOKEN missing",
+                CheckStatus.pass_ if dtok else CheckStatus.skipped,
+                "GOOGLE_ADS_DEVELOPER_TOKEN set (optional since Sept 2026)"
+                if dtok
+                else "optional; Cloud project access level is authoritative",
             )
         )
         login = (settings.google_ads_login_customer_id or "").strip()
@@ -162,11 +164,11 @@ async def run_provider_preflight(
                 f"optional MCC set" if login else "optional; not set",
             )
         )
-        n_present = sum([cid, csec, dtok])
-        credentials_configured = n_present == 3
-        if n_present == 0:
+        oauth_present = cid and csec
+        credentials_configured = oauth_present
+        if not cid and not csec:
             status = PreflightStatus.not_configured
-        elif n_present < 3:
+        elif not oauth_present:
             status = PreflightStatus.partially_configured
         else:
             status = PreflightStatus.configured

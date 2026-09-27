@@ -155,6 +155,8 @@ def classify_google_ads_error(
         or "permission" in combined
         or "developer token" in combined
         or "authorization" in combined
+        or "cloud_project_not_approved_for_production" in combined
+        or "cloud project" in combined and "not approved" in combined
     ):
         return "AUTHORIZATION_ERROR", VerificationErrorCategory.authorization.value
     if status_code == 404 or "not_found" in combined or "does not exist" in combined:

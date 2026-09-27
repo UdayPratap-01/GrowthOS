@@ -248,7 +248,7 @@ async def operator_status(
             autonomous_flag = cfg.meta_autonomous_enabled
         else:
             configured = bool(
-                cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token
+                cfg.google_client_id and cfg.google_client_secret
             )
             autonomous_flag = cfg.google_autonomous_enabled
         providers[provider] = {
@@ -300,7 +300,7 @@ async def operator_status(
     )
     google_ready = derive_provider_readiness_stage(
         credentials_configured=bool(
-            cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token
+            cfg.google_client_id and cfg.google_client_secret
         ),
         integration_connected=bool(providers.get("google_ads", {}).get("connected")),
         demo_mode=cfg.demo_mode,
@@ -312,7 +312,7 @@ async def operator_status(
     readiness = production_readiness_summary(
         meta_credentials=bool(cfg.meta_app_id and cfg.meta_app_secret),
         google_credentials=bool(
-            cfg.google_client_id and cfg.google_client_secret and cfg.google_ads_developer_token
+            cfg.google_client_id and cfg.google_client_secret
         ),
         meta_stage=meta_ready["stage"],
         google_stage=google_ready["stage"],

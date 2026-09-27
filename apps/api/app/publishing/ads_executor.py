@@ -467,16 +467,12 @@ class AdsExecutor:
                 }
             ]
         }
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "developer-token": settings.google_ads_developer_token or "",
-            "Content-Type": "application/json",
-        }
-        if settings.google_ads_login_customer_id:
-            headers["login-customer-id"] = settings.google_ads_login_customer_id.replace("-", "")
+        from app.integrations.google_ads_api import google_ads_headers, google_ads_url
+
+        headers = google_ads_headers(access_token)
 
         # Google Ads REST: campaign status updates use customers/{id}/campaigns:mutate
-        url = f"https://googleads.googleapis.com/v18/customers/{customer_id}/campaigns:mutate"
+        url = google_ads_url(f"/customers/{customer_id}/campaigns:mutate")
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(url, headers=headers, json=mutate_body)
