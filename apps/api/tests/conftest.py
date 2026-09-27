@@ -38,9 +38,9 @@ def _reset_rate_limits():
     happens to run late gets a 429 instead of a token. Tests that assert on
     limiting install their own backend.
     """
-    from app.security.rate_limit import set_rate_limit_backend
+    from app.security.rate_limit import InMemoryRateLimitBackend, set_rate_limit_backend
 
-    set_rate_limit_backend(None)
+    set_rate_limit_backend(InMemoryRateLimitBackend())
     yield
     set_rate_limit_backend(None)
 

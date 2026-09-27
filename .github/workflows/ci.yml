@@ -40,7 +40,7 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
-      ENVIRONMENT: test
+      ENVIRONMENT: development
       DEMO_MODE: "false"
       SECRET_KEY: ci-test-secret-key-not-for-production-use-32b
       ENCRYPTION_KEY: c07bd18492af6c3e59f2c41b7ae0d63528c1fb47e0a95d3ce7b6108fa24d9e35
@@ -71,6 +71,8 @@ jobs:
         run: |
           alembic upgrade head
           alembic check
+      - name: Seed demo data
+        run: python -m app.demo.seed
       - name: Pytest
         run: |
           PYTHONPATH=. pytest -q
