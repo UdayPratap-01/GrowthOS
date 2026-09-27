@@ -210,6 +210,15 @@ class ExecutionEngine:
             return {"confirmed": True, "demo": False}
         if t == AIActionType.create_lead_action:
             return {"confirmed": True, "demo": True, "note": "DEMO DATA — lead follow-up recorded"}
+        if t in {
+            AIActionType.seo_apply_metadata,
+            AIActionType.seo_apply_internal_link,
+            AIActionType.seo_apply_schema,
+            AIActionType.seo_apply_content,
+        }:
+            from app.seo.actions.executor import SeoActionExecutor
+
+            return await SeoActionExecutor(self.db).execute(action)
         return {"confirmed": False, "error": f"UNSUPPORTED_ACTION:{t.value}"}
 
     async def _exec_image(self, action: AIAction) -> dict:

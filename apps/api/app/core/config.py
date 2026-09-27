@@ -169,6 +169,7 @@ class Settings(BaseSettings):
     seo_internal_link_generate_rate_limit_per_hour: int = 24
     seo_internal_link_max_opportunities: int = 75
     seo_internal_link_max_prompt_chars: int = 80_000
+    seo_action_propose_rate_limit_per_hour: int = 48
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10

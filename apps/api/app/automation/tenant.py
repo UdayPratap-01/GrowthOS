@@ -8,8 +8,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.automation.action_types import SEO_ACTIONS
 from app.models.automation import AIAction, CreativeAsset
+from app.models.enums import AIActionType
 from app.models.marketing import Ad, AdSet, Campaign
+from app.models.seo_generated_content import SeoGeneratedContent
+from app.models.seo_internal_link import SeoInternalLinkOpportunity
+from app.models.seo_onpage_optimization import SeoOnPageFinding
+from app.models.seo_schema import SeoSchemaArtifact
 
 
 @dataclass
@@ -64,6 +70,11 @@ class TargetValidator:
         if asset:
             return self._check_client(action, asset.client_id)
 
+        if action.action_type in SEO_ACTIONS:
+            seo_ok = await self._validate_seo_target(action, target_uuid)
+            if seo_ok:
+                return TenantCheckResult(ok=True)
+
         errors.append("TARGET_NOT_FOUND")
         return TenantCheckResult(ok=False, errors=errors)
 
@@ -92,6 +103,46 @@ class TargetValidator:
         return await self.db.scalar(
             select(Ad).where(Ad.id == ad_id, Ad.organization_id == organization_id)
         )
+
+    async def _validate_seo_target(self, action: AIAction, target_uuid: UUID) -> bool:
+        payload = action.payload or {}
+        source_id = payload.get("source_id")
+        if source_id and str(target_uuid) != str(source_id):
+            target_uuid = UUID(str(source_id))
+        org = action.organization_id
+        if action.action_type == AIActionType.seo_apply_internal_link:
+            row = await self.db.scalar(
+                select(SeoInternalLinkOpportunity).where(
+                    SeoInternalLinkOpportunity.id == target_uuid,
+                    SeoInternalLinkOpportunity.organization_id == org,
+                )
+            )
+            return row is not None
+        if action.action_type == AIActionType.seo_apply_metadata:
+            row = await self.db.scalar(
+                select(SeoOnPageFinding).where(
+                    SeoOnPageFinding.id == target_uuid,
+                    SeoOnPageFinding.organization_id == org,
+                )
+            )
+            return row is not None
+        if action.action_type == AIActionType.seo_apply_schema:
+            row = await self.db.scalar(
+                select(SeoSchemaArtifact).where(
+                    SeoSchemaArtifact.id == target_uuid,
+                    SeoSchemaArtifact.organization_id == org,
+                )
+            )
+            return row is not None
+        if action.action_type == AIActionType.seo_apply_content:
+            row = await self.db.scalar(
+                select(SeoGeneratedContent).where(
+                    SeoGeneratedContent.id == target_uuid,
+                    SeoGeneratedContent.organization_id == org,
+                )
+            )
+            return row is not None
+        return False
 
     @staticmethod
     def _parse_uuid(value: str) -> UUID | None:

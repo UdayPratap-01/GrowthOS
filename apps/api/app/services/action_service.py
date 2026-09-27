@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.automation.action_types import get_action_spec
+from app.automation.action_types import SEO_ACTIONS, get_action_spec
 from app.automation.idempotency import (
     build_action_idempotency_key,
     find_action_by_idempotency,
@@ -113,9 +113,11 @@ class ActionService:
                 return AIActionOut.model_validate(dup)
             raise
 
-        # Auto-execute when automation on, approval not required, and mode is assisted/autonomous
+        # Auto-execute when automation on, approval not required, and mode is assisted/autonomous.
+        # SEO actions never auto-approve or auto-execute (M9.13).
         can_auto = (
-            settings.automation_enabled
+            data.action_type not in SEO_ACTIONS
+            and settings.automation_enabled
             and not requires_approval
             and settings.autonomy_mode in {AutonomyMode.autonomous, AutonomyMode.assisted}
         )
@@ -185,6 +187,10 @@ class ActionService:
             payload = dict(action.payload or {})
             payload["approval_note"] = data.note
             action.payload = payload
+        if action.action_type in SEO_ACTIONS:
+            from app.seo.actions.payload import stamp_approved_payload
+
+            action.payload = stamp_approved_payload(dict(action.payload or {}))
         await write_audit(
             self.db,
             organization_id=organization_id,

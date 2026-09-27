@@ -14,6 +14,7 @@ from app.automation.action_types import (
     CAMPAIGN_CREATE_ACTIONS,
     FINANCIAL_ACTIONS,
     PUBLISH_ACTIONS,
+    SEO_ACTIONS,
     get_action_spec,
 )
 from app.models.automation import AIAction, AutonomySettings
@@ -113,11 +114,13 @@ class ActionValidator:
 
         allowed_platforms = settings.allowed_platforms or []
         if platform and allowed_platforms and platform not in allowed_platforms:
-            errors.append(f"PLATFORM_NOT_ALLOWED: {platform}")
+            if action_type not in SEO_ACTIONS:
+                errors.append(f"PLATFORM_NOT_ALLOWED: {platform}")
 
         allowed_actions = settings.allowed_actions or []
         if allowed_actions and action_type.value not in allowed_actions:
-            errors.append(f"ACTION_NOT_ALLOWED: {action_type.value}")
+            if action_type not in SEO_ACTIONS:
+                errors.append(f"ACTION_NOT_ALLOWED: {action_type.value}")
 
         budget = BudgetGuard(settings).check_estimated_cost(estimated_cost, action_type)
         errors.extend(budget.errors)
@@ -176,6 +179,8 @@ class ActionValidator:
         return ValidationResult(ok=not errors, errors=errors, warnings=warnings, requires_approval=requires_approval)
 
     def _requires_approval(self, settings: AutonomySettings, action_type: AIActionType) -> bool:
+        if action_type in SEO_ACTIONS:
+            return True
         if settings.autonomy_mode == AutonomyMode.copilot:
             return True
         if action_type in FINANCIAL_ACTIONS and settings.require_approval_for_financial_actions:

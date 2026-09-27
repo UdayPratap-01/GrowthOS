@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.core.config import Settings, get_settings
 from app.models.automation import AutonomySettings
+from app.automation.action_types import SEO_ACTIONS
 from app.models.enums import AIActionType
 from app.observability import events, metrics
 
@@ -168,13 +169,25 @@ def evaluate_production_gates(
                 code="PROVIDER_GATE_BLOCKED",
             )
 
-    # Organization / client automation
-    result.add(
-        "organization_automation",
-        bool(autonomy.automation_enabled),
-        "automation_enabled" if autonomy.automation_enabled else "ORGANIZATION_AUTOMATION_DISABLED",
-        code=None if autonomy.automation_enabled else "ORGANIZATION_AUTOMATION_DISABLED",
+    # Organization / client automation — SEO explicit-approval execute bypasses this gate.
+    is_seo_execute = (
+        intent == "execute"
+        and isinstance(action_type, AIActionType)
+        and action_type in SEO_ACTIONS
     )
+    if is_seo_execute:
+        result.add(
+            "organization_automation",
+            True,
+            "seo explicit approval execute path",
+        )
+    else:
+        result.add(
+            "organization_automation",
+            bool(autonomy.automation_enabled),
+            "automation_enabled" if autonomy.automation_enabled else "ORGANIZATION_AUTOMATION_DISABLED",
+            code=None if autonomy.automation_enabled else "ORGANIZATION_AUTOMATION_DISABLED",
+        )
 
     # Action allowlist (empty = unrestricted at settings layer; canary may still restrict)
     allowed_actions = {str(a).strip().lower() for a in (autonomy.allowed_actions or []) if str(a).strip()}

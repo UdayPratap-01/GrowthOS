@@ -94,6 +94,10 @@ class AIActionType(str, enum.Enum):
     send_notification = "SEND_NOTIFICATION"
     optimize_campaign = "OPTIMIZE_CAMPAIGN"
     generate_creative_variations = "GENERATE_CREATIVE_VARIATIONS"
+    seo_apply_metadata = "SEO_APPLY_METADATA"
+    seo_apply_internal_link = "SEO_APPLY_INTERNAL_LINK"
+    seo_apply_schema = "SEO_APPLY_SCHEMA"
+    seo_apply_content = "SEO_APPLY_CONTENT"
 
 
 class AIActionStatus(str, enum.Enum):

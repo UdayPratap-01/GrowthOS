@@ -133,6 +133,20 @@ type InternalLinkReport = {
   disclaimer: string;
 };
 
+type SeoAction = {
+  id: string;
+  status: string;
+  action_type: string;
+  requires_approval: boolean;
+  payload: {
+    capability?: string;
+    target?: { source_url?: string; target_url?: string };
+    changes?: { anchor_text?: string };
+    approved_payload_hash?: string;
+  };
+  result?: { review_only?: boolean; note?: string };
+};
+
 function safeText(v: unknown): string {
   if (v == null) return "";
   return String(v);
@@ -152,6 +166,8 @@ export default function SeoContentPage() {
   const [schemaReport, setSchemaReport] = useState<SchemaReport | null>(null);
   const [linksBusy, setLinksBusy] = useState(false);
   const [internalLinks, setInternalLinks] = useState<InternalLinkReport | null>(null);
+  const [linkActions, setLinkActions] = useState<Record<string, SeoAction>>({});
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -254,6 +270,38 @@ export default function SeoContentPage() {
       setError(err instanceof Error ? err.message : "Internal-link discovery failed");
     } finally {
       setLinksBusy(false);
+    }
+  }
+
+  async function proposeLinkAction(oppId: string) {
+    setActionBusy(oppId);
+    setError(null);
+    try {
+      const action = await api<SeoAction>(`/seo/actions/propose/internal-link/${oppId}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setLinkActions((prev) => ({ ...prev, [oppId]: action }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Action proposal failed");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function approveLinkAction(actionId: string, oppId: string) {
+    setActionBusy(oppId);
+    setError(null);
+    try {
+      const action = await api<SeoAction>(`/seo/actions/${actionId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ note: "Explicit approval via SEO content UI" }),
+      });
+      setLinkActions((prev) => ({ ...prev, [oppId]: action }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Approval failed");
+    } finally {
+      setActionBusy(null);
     }
   }
 
@@ -571,6 +619,43 @@ export default function SeoContentPage() {
                         <Button variant="secondary" className="mt-1" onClick={() => copyLinkRecommendation(opp)}>
                           Copy recommendation
                         </Button>
+                        <div className="mt-2 space-y-1 border-t border-[var(--line)] pt-2">
+                          <p className="text-[10px] font-medium uppercase text-[var(--muted)]">M9.13 Action</p>
+                          {linkActions[opp.id] ? (
+                            <>
+                              <p>
+                                Status: <span className="font-mono">{linkActions[opp.id].status}</span> ·{" "}
+                                {linkActions[opp.id].payload.capability ?? "review_only"}
+                              </p>
+                              {linkActions[opp.id].payload.approved_payload_hash ? (
+                                <p className="text-[var(--muted)]">Approved payload locked (immutable)</p>
+                              ) : null}
+                              {linkActions[opp.id].status === "PENDING" ? (
+                                <Button
+                                  variant="secondary"
+                                  disabled={actionBusy === opp.id}
+                                  onClick={() => void approveLinkAction(linkActions[opp.id].id, opp.id)}
+                                >
+                                  {actionBusy === opp.id ? "Approving…" : "Approve action (explicit)"}
+                                </Button>
+                              ) : null}
+                              {linkActions[opp.id].result?.note ? (
+                                <p className="text-amber-900">{safeText(linkActions[opp.id].result?.note)}</p>
+                              ) : null}
+                            </>
+                          ) : (
+                            <Button
+                              variant="secondary"
+                              disabled={actionBusy === opp.id || opp.status !== "suggested"}
+                              onClick={() => void proposeLinkAction(opp.id)}
+                            >
+                              {actionBusy === opp.id ? "Proposing…" : "Propose action for approval"}
+                            </Button>
+                          )}
+                          <p className="text-[10px] text-[var(--muted)]">
+                            Requires explicit approval. Does not auto-publish or modify live sites.
+                          </p>
+                        </div>
                       </div>
                     ))}
                   </div>

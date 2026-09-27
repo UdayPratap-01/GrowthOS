@@ -27,6 +27,13 @@ CAMPAIGN_CREATE_ACTIONS = {
     AIActionType.create_ad,
 }
 
+SEO_ACTIONS = {
+    AIActionType.seo_apply_metadata,
+    AIActionType.seo_apply_internal_link,
+    AIActionType.seo_apply_schema,
+    AIActionType.seo_apply_content,
+}
+
 
 @dataclass(frozen=True)
 class ActionSpec:
@@ -59,6 +66,12 @@ ACTION_REGISTRY: dict[AIActionType, ActionSpec] = {
     AIActionType.generate_creative_variations: ActionSpec(
         AIActionType.generate_creative_variations, RiskLevel.low, False, False
     ),
+    AIActionType.seo_apply_metadata: ActionSpec(AIActionType.seo_apply_metadata, RiskLevel.medium, False, False),
+    AIActionType.seo_apply_internal_link: ActionSpec(
+        AIActionType.seo_apply_internal_link, RiskLevel.medium, False, False
+    ),
+    AIActionType.seo_apply_schema: ActionSpec(AIActionType.seo_apply_schema, RiskLevel.medium, False, False),
+    AIActionType.seo_apply_content: ActionSpec(AIActionType.seo_apply_content, RiskLevel.high, False, False),
 }
 
 
