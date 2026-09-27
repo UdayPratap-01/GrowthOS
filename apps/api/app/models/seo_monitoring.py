@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,7 +24,7 @@ from app.models.enums import (
 class SeoMonitoringConfig(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_monitoring_config"
     __table_args__ = (
-        Index("uq_seo_monitoring_config_org", "organization_id", unique=True),
+        UniqueConstraint("organization_id", name="uq_seo_monitoring_config_org"),
     )
 
     organization_id: Mapped[UUID] = mapped_column(
@@ -83,7 +83,7 @@ class SeoMonitoringRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class SeoMonitoringAlert(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_monitoring_alerts"
     __table_args__ = (
-        Index("uq_seo_monitoring_alerts_org_dedupe", "organization_id", "dedupe_key", unique=True),
+        UniqueConstraint("organization_id", "dedupe_key", name="uq_seo_monitoring_alerts_org_dedupe"),
         Index("ix_seo_monitoring_alerts_org_status", "organization_id", "status"),
     )
 
@@ -116,12 +116,11 @@ class SeoMonitoringAlert(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 class SeoMonitoringSnapshot(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_monitoring_snapshots"
     __table_args__ = (
-        Index(
-            "uq_seo_monitoring_snapshots_org_type_key",
+        UniqueConstraint(
             "organization_id",
             "snapshot_type",
             "snapshot_key",
-            unique=True,
+            name="uq_seo_monitoring_snapshots_org_type_key",
         ),
     )
 
