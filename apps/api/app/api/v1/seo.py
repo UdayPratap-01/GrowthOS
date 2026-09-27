@@ -30,6 +30,7 @@ from app.api.v1.seo_search_console import router as search_console_router
 from app.api.v1.seo_topics import router as topics_router
 from app.api.v1.seo_competitors import router as competitors_router
 from app.api.v1.seo_content_gaps import router as content_gaps_router
+from app.api.v1.seo_recommendations import router as recommendations_router
 
 router = APIRouter(prefix="/seo", tags=["seo"])
 router.include_router(search_console_router)
@@ -37,6 +38,7 @@ router.include_router(keywords_router)
 router.include_router(topics_router)
 router.include_router(competitors_router)
 router.include_router(content_gaps_router)
+router.include_router(recommendations_router)
 
 
 class SeoAuditRequest(BaseModel):

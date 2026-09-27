@@ -47,6 +47,7 @@ from app.models.seo_competitor import (
     SeoCompetitorCrawl,
     SeoCompetitorPage,
 )
+from app.models.seo_recommendation import SeoRecommendation, SeoRecommendationRun
 from app.models.search_console import SearchConsoleOpportunity, SearchConsolePerformanceRow, SearchConsoleSync
 from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
 from app.models.organization import Organization, OrganizationMember
@@ -94,6 +95,8 @@ __all__ = [
     "SeoCompetitorPage",
     "ContentGapAnalysisRun",
     "ContentGap",
+    "SeoRecommendation",
+    "SeoRecommendationRun",
     "AIConversation",
     "Report",
     "Integration",

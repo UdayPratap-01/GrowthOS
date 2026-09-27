@@ -329,6 +329,8 @@ class MockAIProvider(AIProvider):
                 ],
                 "insufficient_data": [],
             }
+        elif schema and schema.__name__ == "SeoRecommendationsGenerated":
+            payload = _seo_recommendations_payload(raw_prompt)
         elif schema and schema.__name__ == "CompetitorInsight":
             payload = {
                 "observations": ["Competitor names from client profile only — no invented spend."],
@@ -813,5 +815,63 @@ def _blueprint_payload(references: list[str]) -> dict[str, Any]:
         ),
         "data_limitations": [
             "No historical audience performance available to justify a finer split."
+        ],
+    }
+
+
+def _seo_recommendations_payload(raw_prompt: str) -> dict[str, Any]:
+    """Build grounded mock SEO recommendations from evidence IDs in the prompt."""
+    import re
+
+    def _first_id(key: str) -> str | None:
+        pattern = rf'"{key}":\s*\[\s*\{{[^}}]*"id":\s*"([^"]+)"'
+        match = re.search(pattern, raw_prompt)
+        return match.group(1) if match else None
+
+    finding_id = _first_id("findings")
+    keyword_id = _first_id("keyword_opportunities")
+    topic_id = _first_id("topic_clusters")
+    gap_id = _first_id("content_gaps")
+    refs = []
+    if finding_id:
+        refs.append({"source": "seo_finding", "id": finding_id, "reason": "Technical finding in supplied evidence"})
+    elif keyword_id:
+        refs.append({"source": "keyword_opportunity", "id": keyword_id, "reason": "Keyword opportunity in supplied evidence"})
+    elif topic_id:
+        refs.append({"source": "topic_cluster", "id": topic_id, "reason": "Topic cluster in supplied evidence"})
+    elif gap_id:
+        refs.append({"source": "content_gap", "id": gap_id, "reason": "Content gap in supplied evidence"})
+    else:
+        refs.append({"source": "keyword_opportunity", "id": "00000000-0000-0000-0000-000000000000", "reason": "placeholder"})
+
+    recs = []
+    if refs[0]["id"] != "00000000-0000-0000-0000-000000000000":
+        recs.append(
+            {
+                "type": "keyword_targeting" if keyword_id else "technical_seo",
+                "title": "Improve observed SEO opportunity",
+                "summary": "Address the supplied evidence signal with a focused on-site improvement.",
+                "rationale": "The evidence snapshot shows a deterministic GrowthOS SEO signal worth action.",
+                "priority": "medium",
+                "impact": "medium",
+                "effort": "medium",
+                "confidence": 0.72,
+                "evidence_refs": refs[:1],
+                "affected_urls": [],
+                "affected_keywords": [],
+                "affected_topics": [topic_id] if topic_id else [],
+                "competitor_context": {},
+                "recommended_action": "Review the cited evidence and plan a content or technical update.",
+                "expected_outcome": "Better alignment between site content and observed query demand.",
+                "limitations": ["Competitor rankings and traffic are unavailable."],
+            }
+        )
+    return {
+        "recommendations": recs,
+        "data_limitations": [
+            "Competitor rankings unavailable",
+            "Competitor search volume unavailable",
+            "Competitor traffic unavailable",
+            "Competitor backlinks unavailable",
         ],
     }

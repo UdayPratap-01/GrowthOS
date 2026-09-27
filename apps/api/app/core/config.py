@@ -146,6 +146,14 @@ class Settings(BaseSettings):
     seo_competitor_crawl_rate_limit_per_hour: int = 6
     content_gap_analyze_rate_limit_per_hour: int = 12
     content_gap_max_comparisons: int = 5000
+    seo_recommendation_generate_rate_limit_per_hour: int = 6
+    seo_recommendation_max_findings: int = 20
+    seo_recommendation_max_keywords: int = 30
+    seo_recommendation_max_topics: int = 20
+    seo_recommendation_max_gaps: int = 20
+    seo_recommendation_max_competitor_pages: int = 15
+    seo_recommendation_max_per_run: int = 15
+    seo_recommendation_max_prompt_chars: int = 120_000
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10
