@@ -16,9 +16,11 @@ from app.schemas.seo_generated_content import (
     SeoGeneratedContentSourceOut,
 )
 from app.schemas.seo_onpage_optimizer import SeoOnPageFindingOut, SeoOnPageOptimizationOut
-from app.security.limits import ai_limit, seo_content_generate_limit, seo_onpage_optimize_limit
+from app.schemas.seo_schema import SeoSchemaArtifactOut, SeoSchemaFindingOut, SeoSchemaGenerateRequest, SeoSchemaListOut, SeoSchemaValidateRequest
+from app.security.limits import ai_limit, seo_content_generate_limit, seo_onpage_optimize_limit, seo_schema_generate_limit
 from app.services.seo_generated_content_service import SeoGeneratedContentService
 from app.services.seo_onpage_optimizer_service import SeoOnPageOptimizerService
+from app.services.seo_schema_service import SeoSchemaService
 from app.services.usage_service import Metric
 from app.security.quota import requires_quota
 
@@ -164,4 +166,81 @@ async def get_seo_content_optimization_finding(
         organization_id=auth.organization_id,
         content_id=content_id,
         finding_id=finding_id,
+    )
+
+
+@router.post(
+    "/{content_id}/schema",
+    dependencies=[Depends(seo_schema_generate_limit)],
+)
+async def generate_seo_schema(
+    content_id: UUID,
+    body: SeoSchemaGenerateRequest | None = None,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await SeoSchemaService(db).generate(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        user_id=auth.user_id,
+        schema_types=body.schema_types if body else None,
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/{content_id}/schema", response_model=SeoSchemaListOut)
+async def list_seo_schema(
+    content_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoSchemaListOut:
+    return await SeoSchemaService(db).list_schemas(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+    )
+
+
+@router.post("/{content_id}/schema/validate")
+async def validate_seo_schema(
+    content_id: UUID,
+    body: SeoSchemaValidateRequest | None = None,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await SeoSchemaService(db).validate(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        user_id=auth.user_id,
+        artifact_id=body.artifact_id if body else None,
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/{content_id}/schema/{schema_id}", response_model=SeoSchemaArtifactOut)
+async def get_seo_schema(
+    content_id: UUID,
+    schema_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoSchemaArtifactOut:
+    return await SeoSchemaService(db).get_schema(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        schema_id=schema_id,
+    )
+
+
+@router.get("/{content_id}/schema/{schema_id}/findings", response_model=list[SeoSchemaFindingOut])
+async def list_seo_schema_findings(
+    content_id: UUID,
+    schema_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> list[SeoSchemaFindingOut]:
+    return await SeoSchemaService(db).list_findings(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        schema_id=schema_id,
     )

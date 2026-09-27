@@ -83,6 +83,27 @@ type OptimizationReport = {
   disclaimer: string;
 };
 
+type SchemaArtifact = {
+  id: string;
+  schema_type: string;
+  status: string;
+  json_ld: Record<string, unknown> | null;
+  validation_status: string;
+  validation_errors: Array<{ code: string; message: string }>;
+  validation_warnings: Array<{ code: string; message: string }>;
+  eligibility_status: string;
+  eligibility_reasons: string[];
+  limitations: string[];
+  generation_algorithm_version: string;
+  validation_algorithm_version: string;
+};
+
+type SchemaReport = {
+  artifacts: SchemaArtifact[];
+  eligibility_summary: Array<{ schema_type: string; status: string; reasons: string[] }>;
+  disclaimer: string;
+};
+
 function safeText(v: unknown): string {
   if (v == null) return "";
   return String(v);
@@ -98,6 +119,8 @@ export default function SeoContentPage() {
   const [busy, setBusy] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [optimization, setOptimization] = useState<OptimizationReport | null>(null);
+  const [schemaBusy, setSchemaBusy] = useState(false);
+  const [schemaReport, setSchemaReport] = useState<SchemaReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -123,6 +146,7 @@ export default function SeoContentPage() {
     if (!selectedId) {
       setSource(null);
       setOptimization(null);
+      setSchemaReport(null);
       return;
     }
     void api<Source>(`/seo/content/${selectedId}/source`)
@@ -131,6 +155,9 @@ export default function SeoContentPage() {
     void api<OptimizationReport>(`/seo/content/${selectedId}/optimization`)
       .then(setOptimization)
       .catch(() => setOptimization(null));
+    void api<SchemaReport>(`/seo/content/${selectedId}/schema`)
+      .then(setSchemaReport)
+      .catch(() => setSchemaReport(null));
   }, [selectedId]);
 
   async function runOptimization() {
@@ -146,6 +173,39 @@ export default function SeoContentPage() {
     } finally {
       setOptimizing(false);
     }
+  }
+
+  async function runSchemaGenerate() {
+    if (!selectedId) return;
+    setSchemaBusy(true);
+    setError(null);
+    try {
+      await api(`/seo/content/${selectedId}/schema`, { method: "POST", body: JSON.stringify({}) });
+      setSchemaReport(await api<SchemaReport>(`/seo/content/${selectedId}/schema`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Schema generation failed");
+    } finally {
+      setSchemaBusy(false);
+    }
+  }
+
+  async function runSchemaValidate() {
+    if (!selectedId) return;
+    setSchemaBusy(true);
+    setError(null);
+    try {
+      await api(`/seo/content/${selectedId}/schema/validate`, { method: "POST", body: JSON.stringify({}) });
+      setSchemaReport(await api<SchemaReport>(`/seo/content/${selectedId}/schema`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Schema validation failed");
+    } finally {
+      setSchemaBusy(false);
+    }
+  }
+
+  function copyJsonLd(artifact: SchemaArtifact) {
+    if (!artifact.json_ld) return;
+    void navigator.clipboard.writeText(JSON.stringify(artifact.json_ld, null, 2));
   }
 
   async function generate() {
@@ -353,6 +413,67 @@ export default function SeoContentPage() {
                         ))}
                       </ul>
                     ) : null}
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-[var(--line)] pt-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">Schema JSON-LD (M9.11)</div>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" disabled={schemaBusy} onClick={() => void runSchemaGenerate()}>
+                      {schemaBusy ? "Working…" : "Generate"}
+                    </Button>
+                    <Button variant="secondary" disabled={schemaBusy} onClick={() => void runSchemaValidate()}>
+                      Validate
+                    </Button>
+                  </div>
+                </div>
+                <p className="mb-2 text-xs text-amber-900">
+                  Draft / Review Only — does not publish, inject, or modify live websites.
+                </p>
+                {schemaReport?.eligibility_summary?.length ? (
+                  <div className="mb-2 flex flex-wrap gap-1">
+                    {schemaReport.eligibility_summary.map((e) => (
+                      <span
+                        key={e.schema_type}
+                        className="rounded border border-[var(--line)] px-1.5 py-0.5 text-xs font-mono"
+                        title={e.reasons.join("; ")}
+                      >
+                        {e.schema_type}: {e.status}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {!schemaReport?.artifacts?.length ? (
+                  <p className="text-sm text-[var(--muted)]">No schema artifacts yet.</p>
+                ) : (
+                  <div className="max-h-80 space-y-2 overflow-auto">
+                    {schemaReport.artifacts.map((a) => (
+                      <div key={a.id} className="rounded border border-[var(--line)] p-2 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">{safeText(a.schema_type)}</span>
+                          <span className="text-[var(--muted)]">{safeText(a.validation_status)}</span>
+                        </div>
+                        <p className="text-[var(--muted)]">Eligibility: {safeText(a.eligibility_status)}</p>
+                        {a.json_ld ? (
+                          <>
+                            <pre className="mt-1 max-h-32 overflow-auto rounded bg-[var(--surface)] p-2 text-[10px]">
+                              {JSON.stringify(a.json_ld, null, 2)}
+                            </pre>
+                            <Button variant="secondary" className="mt-1" onClick={() => copyJsonLd(a)}>
+                              Copy JSON-LD
+                            </Button>
+                          </>
+                        ) : null}
+                        {a.validation_errors.length ? (
+                          <ul className="mt-1 list-disc pl-4 text-red-700">
+                            {a.validation_errors.map((e, i) => (
+                              <li key={i}>{safeText(e.message)}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
