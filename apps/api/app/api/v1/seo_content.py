@@ -16,9 +16,22 @@ from app.schemas.seo_generated_content import (
     SeoGeneratedContentSourceOut,
 )
 from app.schemas.seo_onpage_optimizer import SeoOnPageFindingOut, SeoOnPageOptimizationOut
+from app.schemas.seo_internal_link import (
+    SeoInternalLinkGenerateRequest,
+    SeoInternalLinkOpportunityOut,
+    SeoInternalLinkReportOut,
+    SeoInternalLinkSummaryOut,
+)
 from app.schemas.seo_schema import SeoSchemaArtifactOut, SeoSchemaFindingOut, SeoSchemaGenerateRequest, SeoSchemaListOut, SeoSchemaValidateRequest
-from app.security.limits import ai_limit, seo_content_generate_limit, seo_onpage_optimize_limit, seo_schema_generate_limit
+from app.security.limits import (
+    ai_limit,
+    seo_content_generate_limit,
+    seo_internal_link_generate_limit,
+    seo_onpage_optimize_limit,
+    seo_schema_generate_limit,
+)
 from app.services.seo_generated_content_service import SeoGeneratedContentService
+from app.services.seo_internal_link_service import SeoInternalLinkService
 from app.services.seo_onpage_optimizer_service import SeoOnPageOptimizerService
 from app.services.seo_schema_service import SeoSchemaService
 from app.services.usage_service import Metric
@@ -243,4 +256,86 @@ async def list_seo_schema_findings(
         organization_id=auth.organization_id,
         content_id=content_id,
         schema_id=schema_id,
+    )
+
+
+@router.post(
+    "/{content_id}/internal-links",
+    dependencies=[Depends(seo_internal_link_generate_limit), Depends(ai_limit), Depends(requires_quota(Metric.AI_REQUEST))],
+)
+async def generate_seo_internal_links(
+    content_id: UUID,
+    body: SeoInternalLinkGenerateRequest | None = None,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await SeoInternalLinkService(db).generate(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        user_id=auth.user_id,
+        use_ai=body.use_ai if body else True,
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/{content_id}/internal-links", response_model=SeoInternalLinkReportOut)
+async def get_seo_internal_links(
+    content_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoInternalLinkReportOut:
+    return await SeoInternalLinkService(db).get_report(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+    )
+
+
+@router.get("/{content_id}/internal-links/opportunities", response_model=list[SeoInternalLinkOpportunityOut])
+async def list_seo_internal_link_opportunities(
+    content_id: UUID,
+    source_url: str | None = Query(default=None),
+    target_url: str | None = Query(default=None),
+    opportunity_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> list[SeoInternalLinkOpportunityOut]:
+    return await SeoInternalLinkService(db).list_opportunities(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        source_url=source_url,
+        target_url=target_url,
+        opportunity_type=opportunity_type,
+        status_filter=status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{content_id}/internal-links/opportunities/{opportunity_id}", response_model=SeoInternalLinkOpportunityOut)
+async def get_seo_internal_link_opportunity(
+    content_id: UUID,
+    opportunity_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoInternalLinkOpportunityOut:
+    return await SeoInternalLinkService(db).get_opportunity(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        opportunity_id=opportunity_id,
+    )
+
+
+@router.get("/{content_id}/internal-links/summary", response_model=SeoInternalLinkSummaryOut)
+async def get_seo_internal_links_summary(
+    content_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoInternalLinkSummaryOut:
+    return await SeoInternalLinkService(db).summary(
+        organization_id=auth.organization_id,
+        content_id=content_id,
     )

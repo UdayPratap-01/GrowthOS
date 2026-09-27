@@ -245,6 +245,9 @@ def policies() -> dict[str, RateLimitPolicy]:
         "seo_schema_generate": RateLimitPolicy(
             "seo_schema_generate", s.seo_schema_generate_rate_limit_per_hour, 3600
         ),
+        "seo_internal_link_generate": RateLimitPolicy(
+            "seo_internal_link_generate", s.seo_internal_link_generate_rate_limit_per_hour, 3600
+        ),
     }
 
 

@@ -166,6 +166,9 @@ class Settings(BaseSettings):
     seo_onpage_max_prompt_chars: int = 80_000
     seo_schema_generate_rate_limit_per_hour: int = 24
     seo_schema_max_json_ld_bytes: int = 32_000
+    seo_internal_link_generate_rate_limit_per_hour: int = 24
+    seo_internal_link_max_opportunities: int = 75
+    seo_internal_link_max_prompt_chars: int = 80_000
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10

@@ -104,6 +104,35 @@ type SchemaReport = {
   disclaimer: string;
 };
 
+type InternalLinkOpportunity = {
+  id: string;
+  source_url: string;
+  target_url: string;
+  anchor_text: string;
+  anchor_alternatives: string[];
+  opportunity_type: string;
+  relationship_reason: string;
+  relevance_score: number;
+  confidence: string;
+  score_breakdown: Record<string, number>;
+  evidence_refs: Array<{ source: string; id: string; reason: string }>;
+  limitations: string[];
+  status: string;
+};
+
+type InternalLinkReport = {
+  run: {
+    id: string;
+    stats: { total?: number; by_type?: Record<string, number>; by_confidence?: Record<string, number> };
+    limitations: string[];
+    algorithm_version: string;
+    prompt_version: string;
+    ai_enriched: boolean;
+  };
+  opportunities: InternalLinkOpportunity[];
+  disclaimer: string;
+};
+
 function safeText(v: unknown): string {
   if (v == null) return "";
   return String(v);
@@ -121,6 +150,8 @@ export default function SeoContentPage() {
   const [optimization, setOptimization] = useState<OptimizationReport | null>(null);
   const [schemaBusy, setSchemaBusy] = useState(false);
   const [schemaReport, setSchemaReport] = useState<SchemaReport | null>(null);
+  const [linksBusy, setLinksBusy] = useState(false);
+  const [internalLinks, setInternalLinks] = useState<InternalLinkReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -147,6 +178,7 @@ export default function SeoContentPage() {
       setSource(null);
       setOptimization(null);
       setSchemaReport(null);
+      setInternalLinks(null);
       return;
     }
     void api<Source>(`/seo/content/${selectedId}/source`)
@@ -158,6 +190,9 @@ export default function SeoContentPage() {
     void api<SchemaReport>(`/seo/content/${selectedId}/schema`)
       .then(setSchemaReport)
       .catch(() => setSchemaReport(null));
+    void api<InternalLinkReport>(`/seo/content/${selectedId}/internal-links`)
+      .then(setInternalLinks)
+      .catch(() => setInternalLinks(null));
   }, [selectedId]);
 
   async function runOptimization() {
@@ -206,6 +241,32 @@ export default function SeoContentPage() {
   function copyJsonLd(artifact: SchemaArtifact) {
     if (!artifact.json_ld) return;
     void navigator.clipboard.writeText(JSON.stringify(artifact.json_ld, null, 2));
+  }
+
+  async function runInternalLinks() {
+    if (!selectedId) return;
+    setLinksBusy(true);
+    setError(null);
+    try {
+      await api(`/seo/content/${selectedId}/internal-links`, { method: "POST", body: JSON.stringify({ use_ai: true }) });
+      setInternalLinks(await api<InternalLinkReport>(`/seo/content/${selectedId}/internal-links`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Internal-link discovery failed");
+    } finally {
+      setLinksBusy(false);
+    }
+  }
+
+  function copyLinkRecommendation(opp: InternalLinkOpportunity) {
+    const text = [
+      `Source: ${opp.source_url}`,
+      `Target: ${opp.target_url}`,
+      `Anchor: ${opp.anchor_text}`,
+      `Type: ${opp.opportunity_type}`,
+      `Score: ${opp.relevance_score}`,
+      `Reason: ${opp.relationship_reason}`,
+    ].join("\n");
+    void navigator.clipboard.writeText(text);
   }
 
   async function generate() {
@@ -476,6 +537,51 @@ export default function SeoContentPage() {
                     ))}
                   </div>
                 )}
+              </div>
+              <div className="border-t border-[var(--line)] pt-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">Internal links (M9.12)</div>
+                  <Button variant="secondary" disabled={linksBusy} onClick={() => void runInternalLinks()}>
+                    {linksBusy ? "Discovering…" : "Discover links"}
+                  </Button>
+                </div>
+                <p className="mb-2 text-xs text-amber-900">
+                  Recommendations only — does not publish, inject, or modify live websites.
+                </p>
+                {!internalLinks?.opportunities?.length ? (
+                  <p className="text-sm text-[var(--muted)]">No internal-link opportunities yet.</p>
+                ) : (
+                  <div className="max-h-80 space-y-2 overflow-auto">
+                    {internalLinks.opportunities.map((opp) => (
+                      <div key={opp.id} className="rounded border border-[var(--line)] p-2 text-xs">
+                        <div className="flex flex-wrap gap-2">
+                          <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono">{opp.opportunity_type}</span>
+                          <span className="rounded bg-[var(--surface)] px-1.5 py-0.5">{opp.confidence}</span>
+                          <span className="rounded bg-[var(--surface)] px-1.5 py-0.5">score {opp.relevance_score}</span>
+                        </div>
+                        <p className="mt-1">
+                          <span className="font-medium">Anchor:</span> {safeText(opp.anchor_text)}
+                        </p>
+                        <p className="text-[var(--muted)]">From: {safeText(opp.source_url)}</p>
+                        <p className="text-[var(--muted)]">To: {safeText(opp.target_url)}</p>
+                        <p className="mt-1">{safeText(opp.relationship_reason)}</p>
+                        {opp.anchor_alternatives.length ? (
+                          <p className="text-[var(--muted)]">Alternatives: {opp.anchor_alternatives.join(", ")}</p>
+                        ) : null}
+                        <Button variant="secondary" className="mt-1" onClick={() => copyLinkRecommendation(opp)}>
+                          Copy recommendation
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {internalLinks?.run?.limitations?.length ? (
+                  <ul className="mt-2 list-disc pl-4 text-xs text-[var(--muted)]">
+                    {internalLinks.run.limitations.map((lim, i) => (
+                      <li key={i}>{safeText(lim)}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             </div>
           )}
