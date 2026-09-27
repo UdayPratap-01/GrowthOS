@@ -58,7 +58,14 @@ class FakeResp:
 def test_meta_oauth_scopes_exclude_deprecated_read_insights():
     """Marketing API OAuth must not request read_insights (Meta Invalid Scopes)."""
     scopes = PROVIDER_SCOPES["meta"]
-    assert scopes == ["ads_read", "ads_management", "business_management"]
+    assert scopes == [
+        "ads_read",
+        "ads_management",
+        "business_management",
+        "pages_show_list",
+        "pages_read_engagement",
+        "leads_retrieval",
+    ]
     assert "read_insights" not in scopes
 
 
@@ -514,6 +521,7 @@ async def test_oauth_callback_persists_ad_account(monkeypatch):
     state = encode_oauth_state(
         provider="meta", organization_id=org_id, client_id=client_id, user_id=user_id
     )
+    page_id = f"page-{uuid.uuid4().hex[:8]}"
 
     class FakeHttp:
         async def __aenter__(self):
@@ -535,6 +543,20 @@ async def test_oauth_callback_persists_ad_account(monkeypatch):
                     200,
                     {"data": [{"id": "act_222", "account_id": "222", "name": "Ads 222", "account_status": 1}]},
                 )
+            if "/me/accounts" in url:
+                return FakeResp(
+                    200,
+                    {
+                        "data": [
+                            {
+                                "id": page_id,
+                                "name": "Lead Page",
+                                "access_token": "page-access-token",
+                                "tasks": ["ADVERTISE"],
+                            }
+                        ]
+                    },
+                )
             return FakeResp(404, {})
 
     with patch("app.integrations.meta_family.httpx.AsyncClient", return_value=FakeHttp()):
@@ -553,14 +575,20 @@ async def test_oauth_callback_persists_ad_account(monkeypatch):
                 )
 
     assert result["ad_account_count"] == 1
+    assert result["page_count"] == 1
+    assert result["webhook_routing_ready"] is True
     assert result["long_lived_token"] is True
     assert row is not None
     assert row.config["external_account_id"] == "act_222"
     assert row.config["meta_user_id"] == "user-99"
+    assert row.config["page_id"] == page_id
+    assert row.config["page_ids"] == [page_id]
     tokens = load_tokens(row)
     assert tokens["access_token"] == "long-lived-token"
     assert tokens.get("long_lived") is True
+    assert tokens.get("page_access_token") == "page-access-token"
     assert "access_token" not in json.dumps(result)
+    assert "page-access-token" not in json.dumps(result)
 
 
 @pytest.mark.asyncio

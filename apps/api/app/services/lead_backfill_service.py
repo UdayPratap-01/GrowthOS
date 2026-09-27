@@ -220,7 +220,8 @@ async def backfill_lead_contact(
         return {"lead_id": str(lead_id), "status": UNAVAILABLE, "reason": "no_leadgen_id"}
 
     integration = await _integration_for(db, lead)
-    token = _access_token(integration) if integration else None
+    page_id = str((lead.source_metadata or {}).get("page_id") or "") or None
+    token = _access_token(integration, page_id) if integration else None
     if not token:
         _mark(lead, status=UNAVAILABLE, reason=NO_TOKEN_LIMITATION)
         await db.flush()

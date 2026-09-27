@@ -27,21 +27,25 @@ from app.integrations.persistence import (
     mark_sync,
     upsert_integration,
 )
+from app.integrations.meta_graph_api import META_AUTH_URL, META_GRAPH, META_TOKEN_URL
 from app.models.enums import ConnectionStatus as AccountConnectionStatus
 from app.models.enums import DataSource
 from app.models.marketing import AnalyticsDaily, SocialAccount
-
-
-META_AUTH_URL = "https://www.facebook.com/v21.0/dialog/oauth"
-META_TOKEN_URL = "https://graph.facebook.com/v21.0/oauth/access_token"
-META_GRAPH = "https://graph.facebook.com/v21.0"
 
 
 PROVIDER_SCOPES = {
     # Marketing API / Ads: insights for ad objects are covered by ads_read.
     # Do not request read_insights here — Meta rejects it as Invalid Scopes for
     # Marketing API OAuth (it is a Page Insights permission, not Ads).
-    "meta": ["ads_read", "ads_management", "business_management"],
+    # Lead Ads scopes require Meta App Review before production use.
+    "meta": [
+        "ads_read",
+        "ads_management",
+        "business_management",
+        "pages_show_list",
+        "pages_read_engagement",
+        "leads_retrieval",
+    ],
     "instagram": ["instagram_basic", "instagram_manage_insights", "pages_show_list", "pages_read_engagement"],
     "whatsapp": ["whatsapp_business_management", "whatsapp_business_messaging", "business_management"],
 }
@@ -169,7 +173,9 @@ class MetaFamilyIntegration(MarketingIntegration):
             # Prefer long-lived user token (~60d). Fall back to short-lived if exchange fails.
             from app.integrations.meta_oauth import (
                 build_meta_connection_config,
+                build_meta_token_payload,
                 discover_meta_ad_accounts,
+                discover_meta_pages,
                 exchange_for_long_lived_token,
             )
 
@@ -187,15 +193,25 @@ class MetaFamilyIntegration(MarketingIntegration):
             me = me_resp.json() if me_resp.status_code < 400 else {}
 
             ad_accounts: list = []
+            pages: list = []
             if self.provider == "meta":
                 try:
                     ad_accounts = await discover_meta_ad_accounts(access_token, http_client=client)
                 except Exception:
                     ad_accounts = []
+                try:
+                    pages = await discover_meta_pages(access_token, http_client=client)
+                except Exception:
+                    pages = []
 
         org_id = UUID(payload["organization_id"])
         client_id = UUID(payload["client_id"]) if payload.get("client_id") else None
-        config = build_meta_connection_config(me=me, ad_accounts=ad_accounts, display_name=self.display_name)
+        config = build_meta_connection_config(
+            me=me,
+            ad_accounts=ad_accounts,
+            pages=pages,
+            display_name=self.display_name,
+        )
         await upsert_integration(
             db,
             organization_id=org_id,
@@ -203,14 +219,14 @@ class MetaFamilyIntegration(MarketingIntegration):
             client_id=client_id,
             status="connected",
             config=config,
-            token_payload={
-                "access_token": access_token,
-                "token_type": token_data.get("token_type", "bearer"),
-                "expires_in": expires_in,
-                "obtained_at": datetime.now(timezone.utc).isoformat(),
-                "long_lived": long_lived,
-                "provider": self.provider,
-            },
+            token_payload=build_meta_token_payload(
+                access_token=access_token,
+                token_type=token_data.get("token_type", "bearer"),
+                expires_in=expires_in,
+                long_lived=long_lived,
+                provider=self.provider,
+                pages=pages if self.provider == "meta" else None,
+            ),
         )
         if client_id:
             db.add(
@@ -242,6 +258,9 @@ class MetaFamilyIntegration(MarketingIntegration):
             "client_id": str(client_id) if client_id else None,
             "account_label": config.get("account_label"),
             "ad_account_count": len(ad_accounts),
+            "page_count": len(pages) if self.provider == "meta" else 0,
+            "page_selection_required": bool(config.get("lead_ads", {}).get("page_selection_required")),
+            "webhook_routing_ready": bool(config.get("lead_ads", {}).get("webhook_routing_ready")),
             "long_lived_token": long_lived,
         }
 

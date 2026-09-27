@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.meta_graph_api import meta_graph_url, safe_meta_graph_error
 from app.models.ai_ops import Integration
 from app.models.enums import LeadStatus
 from app.models.leads import Lead, LeadActivity
@@ -210,10 +211,11 @@ async def fetch_lead_details(leadgen_id: str, access_token: str) -> dict[str, An
     """Fetch the submitted field data for a lead from the Graph API."""
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(
-            f"https://graph.facebook.com/v19.0/{leadgen_id}",
+            meta_graph_url(leadgen_id),
             params={"access_token": access_token, "fields": "field_data,created_time,ad_id,campaign_id,form_id"},
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise RuntimeError(safe_meta_graph_error(resp.text))
         return resp.json()
 
 
@@ -237,7 +239,7 @@ def _pick(fields: dict[str, str], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _access_token(integration: Integration) -> str | None:
+def _access_token(integration: Integration, page_id: str | None = None) -> str | None:
     if not integration.secret_ref:
         return None
     try:
@@ -248,7 +250,15 @@ def _access_token(integration: Integration) -> str | None:
         return None
     if not isinstance(tokens, dict):
         return None
-    return tokens.get("page_access_token") or tokens.get("access_token")
+    page_tokens = tokens.get("page_access_tokens")
+    if page_id and isinstance(page_tokens, dict):
+        page_token = page_tokens.get(page_id)
+        if page_token:
+            return str(page_token)
+    if tokens.get("page_access_token"):
+        return str(tokens["page_access_token"])
+    user_token = tokens.get("access_token")
+    return str(user_token) if user_token else None
 
 
 # --------------------------------------------------------------------------
@@ -378,7 +388,7 @@ async def _upsert_lead(
 
     details: dict[str, Any] = {}
     enrichment_error: str | None = None
-    token = _access_token(integration)
+    token = _access_token(integration, event.page_id)
     if token:
         try:
             details = await fetcher(event.leadgen_id, token)

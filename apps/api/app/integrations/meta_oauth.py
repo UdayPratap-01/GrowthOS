@@ -12,7 +12,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.integrations.meta_family import META_GRAPH, META_TOKEN_URL
+from app.integrations.meta_graph_api import META_GRAPH, META_TOKEN_URL, safe_meta_graph_error
 from app.integrations.persistence import load_tokens, upsert_integration
 from app.models.ai_ops import Integration
 from app.observability import events
@@ -20,11 +20,7 @@ from app.observability import events
 
 def _safe_meta_error(text: str) -> str:
     """Strip anything that might look like a token from provider error text."""
-    lowered = (text or "").lower()
-    for needle in ("access_token", "app_secret", "client_secret", "fb_exchange_token"):
-        if needle in lowered:
-            return "Meta OAuth error (details redacted)"
-    return (text or "")[:240]
+    return safe_meta_graph_error(text)
 
 
 async def exchange_for_long_lived_token(short_lived_token: str) -> dict[str, Any]:
@@ -94,6 +90,87 @@ async def discover_meta_ad_accounts(
             }
         )
     return out
+
+
+async def discover_meta_pages(
+    access_token: str,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Discover Facebook Pages accessible to the authenticated user.
+
+    Page access tokens are returned for encrypted storage only — never written
+    to Integration.config.
+    """
+    owns = http_client is None
+    client = http_client or httpx.AsyncClient(timeout=30)
+    pages: list[dict[str, Any]] = []
+    try:
+        next_url: str | None = f"{META_GRAPH}/me/accounts"
+        params: dict[str, Any] | None = {
+            "access_token": access_token,
+            "fields": "id,name,access_token,tasks,category",
+            "limit": 50,
+        }
+        while next_url and len(pages) < 50:
+            resp = await client.get(next_url, params=params)
+            params = None
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Meta pages discovery failed: {_safe_meta_error(resp.text)}")
+            body = resp.json() if resp.content else {}
+            for item in body.get("data") or []:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                pages.append(
+                    {
+                        "id": str(item["id"]),
+                        "name": item.get("name"),
+                        "access_token": item.get("access_token"),
+                        "tasks": item.get("tasks") or [],
+                        "category": item.get("category"),
+                    }
+                )
+            next_url = (body.get("paging") or {}).get("next")
+    finally:
+        if owns:
+            await client.aclose()
+    return pages[:50]
+
+
+def build_meta_token_payload(
+    *,
+    access_token: str,
+    token_type: str,
+    expires_in: int | None,
+    long_lived: bool,
+    provider: str,
+    pages: list[dict[str, Any]] | None = None,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Encrypted token payload for Meta integrations. Never log or expose return value."""
+    payload: dict[str, Any] = dict(existing or {})
+    payload.update(
+        {
+            "access_token": access_token,
+            "token_type": token_type,
+            "expires_in": expires_in,
+            "obtained_at": datetime.now(timezone.utc).isoformat(),
+            "long_lived": long_lived,
+            "provider": provider,
+        }
+    )
+    page_tokens: dict[str, str] = {}
+    for page in pages or []:
+        page_id = page.get("id")
+        page_token = page.get("access_token")
+        if page_id and page_token:
+            page_tokens[str(page_id)] = str(page_token)
+    if page_tokens:
+        payload["page_access_tokens"] = page_tokens
+        if len(page_tokens) == 1:
+            payload["page_access_token"] = next(iter(page_tokens.values()))
+    return payload
 
 
 async def ensure_meta_access_token(
@@ -180,14 +257,31 @@ def build_meta_connection_config(
     me: dict[str, Any],
     ad_accounts: list[dict[str, Any]],
     display_name: str,
+    pages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Sanitized Integration.config for Meta — never includes tokens."""
     primary = ad_accounts[0] if ad_accounts else None
+    sanitized_pages = [
+        {
+            "id": str(page["id"]),
+            "name": page.get("name"),
+            "tasks": page.get("tasks") or [],
+            "category": page.get("category"),
+        }
+        for page in (pages or [])
+        if page.get("id")
+    ]
+    page_ids = [page["id"] for page in sanitized_pages]
+    # Only pin a single page_id when exactly one Page exists — never guess among many.
+    primary_page_id = page_ids[0] if len(page_ids) == 1 else None
     return {
         "account_label": (primary or {}).get("name") or me.get("name") or me.get("id") or display_name,
         "meta_user_id": me.get("id"),
         # Prefer ad account act_* for canary allowlists; keep user id separately.
         "external_account_id": (primary or {}).get("id") or me.get("id"),
+        "page_id": primary_page_id,
+        "page_ids": page_ids,
+        "pages": sanitized_pages[:50],
         "ad_accounts": [
             {
                 "id": a.get("id"),
@@ -202,6 +296,12 @@ def build_meta_connection_config(
         "token_type": "meta_user",
         "discovery": {
             "ad_account_count": len(ad_accounts),
+            "page_count": len(sanitized_pages),
             "discovered_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "lead_ads": {
+            "pages_connected": len(page_ids),
+            "page_selection_required": len(page_ids) > 1,
+            "webhook_routing_ready": bool(page_ids),
         },
     }
