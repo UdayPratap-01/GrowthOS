@@ -66,6 +66,13 @@ type Dashboard = {
       link_path?: string | null;
     }>;
   };
+  monitoring: Panel & {
+    monitoring_enabled: boolean;
+    scheduler_enabled: boolean;
+    open_alerts: number;
+    last_monitor_run_at?: string | null;
+    last_failure_reason?: string | null;
+  };
 };
 
 type Panel = {
@@ -184,8 +191,24 @@ export default function SeoDashboardPage() {
           <MetricCard label="Content gaps" value={o.content_gaps} href="/seo/content-gaps" />
           <MetricCard label="Recommendations" value={o.recommendations} href="/seo/recommendations" />
           <MetricCard label="Internal links" value={o.internal_link_opportunities} href="/seo/content" />
+          <MetricCard
+            label="Monitoring alerts"
+            value={dash.monitoring.open_alerts}
+            href="/seo/monitoring"
+            sub={dash.monitoring.monitoring_enabled ? "Monitoring enabled" : "Monitoring disabled"}
+          />
         </div>
       </section>
+
+      {dash.monitoring.last_failure_reason ? (
+        <Card>
+          <CardHeader title="Monitoring status" subtitle="Latest monitoring failure detected" />
+          <p className="text-sm text-red-600">{safeText(dash.monitoring.last_failure_reason)}</p>
+          <Link href="/seo/monitoring" className="mt-2 inline-block text-sm underline">
+            View monitoring
+          </Link>
+        </Card>
+      ) : null}
 
       {dash.attention.available && dash.attention.items.length > 0 ? (
         <Card>

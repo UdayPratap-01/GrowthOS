@@ -103,6 +103,7 @@ async def test_dashboard_api_returns_sections():
         "internal_links",
         "actions",
         "attention",
+        "monitoring",
     ):
         assert section in body
     assert "disclaimer" in body

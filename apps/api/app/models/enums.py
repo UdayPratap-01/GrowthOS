@@ -139,6 +139,58 @@ class SeoFindingStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+class SeoMonitoringRunType(str, enum.Enum):
+    aggregate = "aggregate"
+    site_crawl = "site_crawl"
+    search_console = "search_console"
+    competitor = "competitor"
+    alert_evaluation = "alert_evaluation"
+
+
+class SeoMonitoringRunStatus(str, enum.Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    skipped = "skipped"
+
+
+class SeoMonitoringRunTrigger(str, enum.Enum):
+    scheduler = "scheduler"
+    manual = "manual"
+
+
+class SeoMonitoringAlertStatus(str, enum.Enum):
+    open = "open"
+    acknowledged = "acknowledged"
+    resolved = "resolved"
+
+
+class SeoMonitoringAlertSeverity(str, enum.Enum):
+    critical = "critical"
+    high = "high"
+    medium = "medium"
+    low = "low"
+    info = "info"
+
+
+class SeoMonitoringAlertType(str, enum.Enum):
+    technical_new_high_finding = "technical_new_high_finding"
+    technical_finding_resolved = "technical_finding_resolved"
+    technical_high_count_increase = "technical_high_count_increase"
+    gsc_clicks_decline = "gsc_clicks_decline"
+    gsc_impressions_decline = "gsc_impressions_decline"
+    gsc_position_change = "gsc_position_change"
+    gsc_new_opportunity = "gsc_new_opportunity"
+    keyword_new_high_priority = "keyword_new_high_priority"
+    content_gap_new = "content_gap_new"
+    schema_validation_regression = "schema_validation_regression"
+    internal_link_high_confidence = "internal_link_high_confidence"
+    action_pending_approval = "action_pending_approval"
+    monitoring_job_failed = "monitoring_job_failed"
+    authorization_required = "authorization_required"
+
+
 class SearchConsoleSyncStatus(str, enum.Enum):
     pending = "pending"
     running = "running"

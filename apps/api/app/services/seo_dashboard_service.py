@@ -31,6 +31,7 @@ from app.schemas.seo_dashboard import (
     DashboardContentOut,
     DashboardInternalLinksOut,
     DashboardKeywordsOut,
+    DashboardMonitoringOut,
     DashboardOnPageOut,
     DashboardOverviewOut,
     DashboardSchemaOut,
@@ -45,6 +46,7 @@ from app.services.search_console_intelligence_service import SearchConsoleIntell
 from app.services.seo_action_service import SeoActionService
 from app.services.seo_analysis_service import SeoAnalysisService
 from app.services.seo_recommendation_service import SeoRecommendationService
+from app.services.seo_monitoring_service import SeoMonitoringService
 from app.services.topic_clustering_service import TopicClusteringService
 
 DISCLAIMER = (
@@ -76,6 +78,7 @@ class SeoDashboardService:
         schema = await self._schema_panel(organization_id)
         internal_links = await self._internal_links_panel(organization_id)
         actions = await self._actions_panel(organization_id)
+        monitoring = await self._monitoring_panel(organization_id)
 
         overview = DashboardOverviewOut(
             latest_crawl_id=latest_crawl.id if latest_crawl else None,
@@ -121,6 +124,7 @@ class SeoDashboardService:
             internal_links=internal_links,
             actions=actions,
             attention=attention,
+            monitoring=monitoring,
         )
 
     async def _latest_crawl(self, organization_id: UUID) -> SeoCrawl | None:
@@ -446,6 +450,25 @@ class SeoDashboardService:
             failed=summary.failed,
             review_only=summary.review_only,
             recent_pending=recent,
+        )
+
+    async def _monitoring_panel(self, organization_id: UUID) -> DashboardMonitoringOut:
+        from app.core.config import get_settings
+
+        status = await SeoMonitoringService(self.db).get_status(organization_id=organization_id)
+        config = status["config"]
+        settings = get_settings()
+        return DashboardMonitoringOut(
+            available=True,
+            empty_message=None if config.monitoring_enabled else "Monitoring is disabled. Enable it in SEO Monitoring settings.",
+            monitoring_enabled=config.monitoring_enabled,
+            scheduler_enabled=settings.seo_monitor_scheduler_enabled,
+            open_alerts=status["open_alerts"],
+            last_monitor_run_at=config.last_monitor_run_at,
+            last_crawl_at=config.last_crawl_at,
+            last_sync_at=config.last_sync_at,
+            last_failure_reason=config.last_failure_reason,
+            next_scheduled_run=status["next_scheduled_run"],
         )
 
     async def _count_recommendations(

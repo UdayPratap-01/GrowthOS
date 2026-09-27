@@ -781,6 +781,20 @@ async def handle_seo_crawl(db: AsyncSession, job: BackgroundJob) -> dict:
             crawl.stats = {**(crawl.stats or {}), "analysis_status": "failed"}
             await db.flush()
 
+        monitoring_run_id_raw = payload.get("monitoring_run_id")
+        if monitoring_run_id_raw and crawl.status.value == "completed":
+            from app.services.seo_monitoring_service import SeoMonitoringService
+
+            try:
+                monitoring_result = await SeoMonitoringService(db).process_crawl_completion(
+                    organization_id=job.organization_id,
+                    crawl_id=crawl.id,
+                    monitoring_run_id=UUID(str(monitoring_run_id_raw)),
+                )
+                result["monitoring"] = monitoring_result
+            except Exception:
+                logger.exception("seo monitoring post-crawl evaluation failed crawl_id=%s", crawl.id)
+
     return result
 
 
@@ -807,4 +821,79 @@ async def handle_seo_competitor_crawl(db: AsyncSession, job: BackgroundJob) -> d
         return {"crawl_id": str(crawl.id), "status": crawl.status.value, "cancelled": True}
 
     limits = clamp_competitor_crawl_limits(crawl.config)
-    return await CompetitorSiteCrawler(limits=limits).run(db, crawl)
+    result = await CompetitorSiteCrawler(limits=limits).run(db, crawl)
+    return result
+
+
+async def handle_seo_monitor_scheduler_tick(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Discover monitoring-enabled tenants and enqueue bounded monitor cycles."""
+    from app.core.config import get_settings
+    from app.jobs.seo_monitor_scheduler import (
+        discover_monitor_targets,
+        enqueue_monitor_cycle,
+        schedule_next_monitor_tick,
+        scheduled_window_start,
+    )
+    from app.security.audit import write_audit
+
+    settings = get_settings()
+    if not settings.seo_monitor_scheduler_enabled:
+        logger.info("seo monitor tick skipped scheduler_disabled job_id=%s", job.id)
+        return {"skipped": True, "reason": "SCHEDULER_DISABLED"}
+
+    payload = job.payload or {}
+    now = datetime.now(timezone.utc)
+    window_raw = payload.get("window")
+    if window_raw:
+        try:
+            window = datetime.fromisoformat(str(window_raw))
+            if window.tzinfo is None:
+                window = window.replace(tzinfo=timezone.utc)
+        except ValueError:
+            window = scheduled_window_start(now, settings.seo_monitor_interval_minutes)
+    else:
+        window = scheduled_window_start(now, settings.seo_monitor_interval_minutes)
+
+    targets = await discover_monitor_targets(db, max_orgs=settings.seo_monitor_max_orgs_per_cycle)
+    enqueued = 0
+    skipped = 0
+    for org, _config in targets:
+        result = await enqueue_monitor_cycle(db, organization=org, window_start=window, trigger="scheduler")
+        if result.skipped:
+            skipped += 1
+        elif result.job is not None:
+            enqueued += 1
+
+    await schedule_next_monitor_tick(db)
+    await write_audit(
+        db,
+        action="seo.monitor.tick",
+        organization_id=None,
+        user_id=None,
+        resource_type="background_job",
+        resource_id=str(job.id),
+        details={"enqueued": enqueued, "skipped": skipped, "window": window.isoformat()},
+    )
+    return {"enqueued": enqueued, "skipped": skipped, "window": window.isoformat()}
+
+
+async def handle_seo_monitor_cycle(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Run one bounded SEO monitoring cycle — detect and report only."""
+    from app.security.audit import write_audit
+    from app.services.seo_monitoring_service import SeoMonitoringService
+
+    if job.organization_id is None:
+        raise UnrecoverableJobError("seo.monitor_cycle requires organization_id")
+
+    svc = SeoMonitoringService(db)
+    result = await svc.run_monitor_cycle(organization_id=job.organization_id, job=job)
+    await write_audit(
+        db,
+        action="seo.monitor.cycle",
+        organization_id=job.organization_id,
+        user_id=None,
+        resource_type="background_job",
+        resource_id=str(job.id),
+        details={"result_keys": list(result.keys()), "trigger": (job.payload or {}).get("trigger")},
+    )
+    return result

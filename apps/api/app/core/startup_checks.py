@@ -165,6 +165,12 @@ def validate_configuration(settings: Settings | None = None) -> None:
         for msg in validate_autopilot_scheduler_settings(settings):
             errors.append(msg)
 
+    from app.jobs.seo_monitor_scheduler import validate_seo_monitor_scheduler_settings
+
+    if settings.seo_monitor_scheduler_enabled:
+        for msg in validate_seo_monitor_scheduler_settings(settings):
+            errors.append(msg)
+
     from app.automation.stale_recovery import validate_stale_recovery_settings
 
     for msg in validate_stale_recovery_settings(settings):

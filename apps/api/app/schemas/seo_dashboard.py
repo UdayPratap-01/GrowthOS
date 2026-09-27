@@ -129,6 +129,17 @@ class DashboardAttentionOut(DashboardSectionMeta):
     items: list[DashboardAttentionItemOut] = Field(default_factory=list)
 
 
+class DashboardMonitoringOut(DashboardSectionMeta):
+    monitoring_enabled: bool = False
+    scheduler_enabled: bool = False
+    open_alerts: int = 0
+    last_monitor_run_at: datetime | None = None
+    last_crawl_at: datetime | None = None
+    last_sync_at: datetime | None = None
+    last_failure_reason: str | None = None
+    next_scheduled_run: datetime | None = None
+
+
 class SeoDashboardOut(BaseModel):
     generated_at: datetime
     disclaimer: str
@@ -144,3 +155,4 @@ class SeoDashboardOut(BaseModel):
     internal_links: DashboardInternalLinksOut
     actions: DashboardActionsOut
     attention: DashboardAttentionOut
+    monitoring: DashboardMonitoringOut

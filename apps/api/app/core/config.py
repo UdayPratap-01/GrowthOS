@@ -217,6 +217,12 @@ class Settings(BaseSettings):
     autopilot_interval_minutes: int = 60
     autopilot_max_orgs_per_cycle: int = 10
 
+    # ---- Scheduled SEO monitoring (M9.15) -----------------------------------
+    seo_monitor_scheduler_enabled: bool = False
+    seo_monitor_interval_minutes: int = 1440
+    seo_monitor_max_orgs_per_cycle: int = 50
+    seo_monitor_manual_rate_limit_per_hour: int = 2
+
     # ---- Stale AI action execution recovery --------------------------------
     autonomous_execution_stale_timeout_minutes: int = 30
     autonomous_execution_stale_recovery_batch_size: int = 50

@@ -251,6 +251,9 @@ def policies() -> dict[str, RateLimitPolicy]:
         "seo_action_propose": RateLimitPolicy(
             "seo_action_propose", s.seo_action_propose_rate_limit_per_hour, 3600
         ),
+        "seo_monitor_manual": RateLimitPolicy(
+            "seo_monitor_manual", s.seo_monitor_manual_rate_limit_per_hour, 3600
+        ),
     }
 
 

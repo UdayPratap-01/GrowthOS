@@ -55,6 +55,12 @@ from app.models.seo_schema import SeoSchemaArtifact, SeoSchemaFinding
 from app.models.seo_internal_link import SeoInternalLinkOpportunity, SeoInternalLinkRun
 from app.models.search_console import SearchConsoleOpportunity, SearchConsolePerformanceRow, SearchConsoleSync
 from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
+from app.models.seo_monitoring import (
+    SeoMonitoringAlert,
+    SeoMonitoringConfig,
+    SeoMonitoringRun,
+    SeoMonitoringSnapshot,
+)
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
 from app.models.usage import UsageRecord
@@ -110,6 +116,10 @@ __all__ = [
     "SeoSchemaFinding",
     "SeoInternalLinkRun",
     "SeoInternalLinkOpportunity",
+    "SeoMonitoringConfig",
+    "SeoMonitoringRun",
+    "SeoMonitoringAlert",
+    "SeoMonitoringSnapshot",
     "AIConversation",
     "Report",
     "Integration",

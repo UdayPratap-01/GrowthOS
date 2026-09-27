@@ -95,6 +95,11 @@ class Worker:
 
                     await ensure_scheduler_tick(db)
 
+                if settings.seo_monitor_scheduler_enabled:
+                    from app.jobs.seo_monitor_scheduler import ensure_seo_monitor_tick
+
+                    await ensure_seo_monitor_tick(db)
+
                 from app.automation.stale_recovery import reap_stale_executing_actions
 
                 stale_recovered = await reap_stale_executing_actions(db)
