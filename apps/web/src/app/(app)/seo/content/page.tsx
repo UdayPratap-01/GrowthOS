@@ -52,6 +52,37 @@ type Source = {
   disclaimer: string;
 };
 
+type OnPageFinding = {
+  id: string;
+  finding_type: string;
+  category: string;
+  severity: string;
+  priority: string;
+  title: string;
+  summary: string;
+  rationale: string;
+  current_value: string | null;
+  expected_value: string | null;
+  recommendation: string;
+  evidence_refs: Array<{ source: string; id: string; reason: string }>;
+  affected_section: string | null;
+  suggested_change: string | null;
+};
+
+type OptimizationReport = {
+  run: {
+    id: string;
+    status: string;
+    stats: { total?: number; by_severity?: Record<string, number>; by_category?: Record<string, number> };
+    limitations: string[];
+    algorithm_version: string;
+    prompt_version: string;
+    ai_enriched: boolean;
+  };
+  findings: OnPageFinding[];
+  disclaimer: string;
+};
+
 function safeText(v: unknown): string {
   if (v == null) return "";
   return String(v);
@@ -65,6 +96,8 @@ export default function SeoContentPage() {
   const [source, setSource] = useState<Source | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimization, setOptimization] = useState<OptimizationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -89,12 +122,31 @@ export default function SeoContentPage() {
   useEffect(() => {
     if (!selectedId) {
       setSource(null);
+      setOptimization(null);
       return;
     }
     void api<Source>(`/seo/content/${selectedId}/source`)
       .then(setSource)
       .catch(() => setSource(null));
+    void api<OptimizationReport>(`/seo/content/${selectedId}/optimization`)
+      .then(setOptimization)
+      .catch(() => setOptimization(null));
   }, [selectedId]);
+
+  async function runOptimization() {
+    if (!selectedId) return;
+    setOptimizing(true);
+    setError(null);
+    try {
+      await api(`/seo/content/${selectedId}/optimize`, { method: "POST" });
+      const report = await api<OptimizationReport>(`/seo/content/${selectedId}/optimization`);
+      setOptimization(report);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Optimization failed");
+    } finally {
+      setOptimizing(false);
+    }
+  }
 
   async function generate() {
     if (!selectedBriefId) {
@@ -245,6 +297,64 @@ export default function SeoContentPage() {
               <div className="text-xs text-[var(--muted)]">
                 {safeText(selected.algorithm_version)} · {safeText(selected.prompt_version)} · {safeText(selected.provider)} /{" "}
                 {safeText(selected.model)}
+              </div>
+              <div className="border-t border-[var(--line)] pt-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="font-medium">On-page optimization (M9.10)</div>
+                  <Button variant="secondary" disabled={optimizing} onClick={() => void runOptimization()}>
+                    {optimizing ? "Analyzing…" : "Run optimization"}
+                  </Button>
+                </div>
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  Review-only recommendations. Does not publish or modify live websites.
+                </p>
+                {!optimization ? (
+                  <p className="text-sm text-[var(--muted)]">No optimization run yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs text-[var(--muted)]">
+                      {optimization.run.algorithm_version} · {optimization.run.stats.total ?? 0} findings
+                      {optimization.run.ai_enriched ? " · AI suggestions included" : ""}
+                    </div>
+                    {optimization.findings.length === 0 ? (
+                      <p className="text-sm text-green-700">No issues detected by deterministic checks.</p>
+                    ) : (
+                      <div className="max-h-72 space-y-2 overflow-auto">
+                        {optimization.findings.map((f) => (
+                          <div key={f.id} className="rounded border border-[var(--line)] p-2 text-xs">
+                            <div className="flex flex-wrap gap-2">
+                              <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono">{f.category}</span>
+                              <span className="rounded bg-[var(--surface)] px-1.5 py-0.5">{f.severity}</span>
+                              <span className="rounded bg-[var(--surface)] px-1.5 py-0.5">{f.priority}</span>
+                            </div>
+                            <div className="mt-1 font-medium">{safeText(f.title)}</div>
+                            <p className="text-[var(--muted)]">{safeText(f.summary)}</p>
+                            {f.current_value ? (
+                              <p>
+                                <span className="font-medium">Current:</span> {safeText(f.current_value)}
+                              </p>
+                            ) : null}
+                            <p>
+                              <span className="font-medium">Recommendation:</span> {safeText(f.recommendation)}
+                            </p>
+                            {f.suggested_change ? (
+                              <p className="mt-1 rounded bg-amber-50 p-2 text-amber-900">
+                                <span className="font-medium">Suggested rewrite:</span> {safeText(f.suggested_change)}
+                              </p>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {optimization.run.limitations.length ? (
+                      <ul className="mt-2 list-disc pl-4 text-xs text-[var(--muted)]">
+                        {optimization.run.limitations.map((lim, i) => (
+                          <li key={i}>{safeText(lim)}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </div>
           )}

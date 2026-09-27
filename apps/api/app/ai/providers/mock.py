@@ -335,6 +335,8 @@ class MockAIProvider(AIProvider):
             payload = _seo_content_brief_payload(raw_prompt)
         elif schema and schema.__name__ == "SeoGeneratedContentOutput":
             payload = _seo_generated_content_payload(raw_prompt)
+        elif schema and schema.__name__ == "SeoOnPageOptimizerAiOutput":
+            payload = _seo_onpage_optimizer_payload(raw_prompt)
         elif schema and schema.__name__ == "CompetitorInsight":
             payload = {
                 "observations": ["Competitor names from client profile only — no invented spend."],
@@ -1023,4 +1025,26 @@ def _seo_generated_content_payload(raw_prompt: str) -> dict[str, Any]:
             "limitations": ["Draft only — not published automatically."],
         },
         "data_limitations": ["Competitor metrics unavailable"],
+    }
+
+
+def _seo_onpage_optimizer_payload(raw_prompt: str) -> dict[str, Any]:
+    """Grounded mock on-page rewrite suggestions from deterministic findings."""
+    import re
+
+    suggestions: list[dict[str, str]] = []
+    for match in re.finditer(r'"finding_type":\s*"([^"]+)"', raw_prompt):
+        finding_type = match.group(1)
+        suggestions.append(
+            {
+                "finding_type": finding_type,
+                "suggested_change": f"Revise content to address {finding_type.replace('_', ' ')} naturally.",
+                "explanation": "Suggestion based on supplied finding only — no invented metrics.",
+            }
+        )
+        if len(suggestions) >= 10:
+            break
+    return {
+        "suggestions": suggestions,
+        "limitations": ["AI suggestions are editorial only; verify against the content brief."],
     }

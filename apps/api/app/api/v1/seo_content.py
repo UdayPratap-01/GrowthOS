@@ -15,8 +15,10 @@ from app.schemas.seo_generated_content import (
     SeoGeneratedContentOut,
     SeoGeneratedContentSourceOut,
 )
-from app.security.limits import ai_limit, seo_content_generate_limit
+from app.schemas.seo_onpage_optimizer import SeoOnPageFindingOut, SeoOnPageOptimizationOut
+from app.security.limits import ai_limit, seo_content_generate_limit, seo_onpage_optimize_limit
 from app.services.seo_generated_content_service import SeoGeneratedContentService
+from app.services.seo_onpage_optimizer_service import SeoOnPageOptimizerService
 from app.services.usage_service import Metric
 from app.security.quota import requires_quota
 
@@ -99,3 +101,67 @@ async def archive_seo_content(
     )
     await db.commit()
     return SeoGeneratedContentOut.model_validate(row)
+
+
+@router.post(
+    "/{content_id}/optimize",
+    dependencies=[Depends(seo_onpage_optimize_limit), Depends(ai_limit), Depends(requires_quota(Metric.AI_REQUEST))],
+)
+async def optimize_seo_content(
+    content_id: UUID,
+    auth: AuthContext = Depends(require_permission(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    result = await SeoOnPageOptimizerService(db).optimize(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        user_id=auth.user_id,
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/{content_id}/optimization", response_model=SeoOnPageOptimizationOut)
+async def get_seo_content_optimization(
+    content_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoOnPageOptimizationOut:
+    return await SeoOnPageOptimizerService(db).get_optimization(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+    )
+
+
+@router.get("/{content_id}/optimization/findings", response_model=list[SeoOnPageFindingOut])
+async def list_seo_content_optimization_findings(
+    content_id: UUID,
+    category: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> list[SeoOnPageFindingOut]:
+    return await SeoOnPageOptimizerService(db).list_findings(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        category=category,
+        severity=severity,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{content_id}/optimization/findings/{finding_id}", response_model=SeoOnPageFindingOut)
+async def get_seo_content_optimization_finding(
+    content_id: UUID,
+    finding_id: UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoOnPageFindingOut:
+    return await SeoOnPageOptimizerService(db).get_finding(
+        organization_id=auth.organization_id,
+        content_id=content_id,
+        finding_id=finding_id,
+    )
