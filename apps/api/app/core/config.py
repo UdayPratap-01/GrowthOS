@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     seo_recommendation_max_competitor_pages: int = 15
     seo_recommendation_max_per_run: int = 15
     seo_recommendation_max_prompt_chars: int = 120_000
+    seo_content_brief_generate_rate_limit_per_hour: int = 12
+    seo_content_brief_max_evidence: int = 15
+    seo_content_brief_max_internal_links: int = 20
+    seo_content_brief_max_prompt_chars: int = 100_000
 
     # SEO crawl — read-only full-site crawler (M9.1)
     seo_crawl_rate_limit_per_hour: int = 10

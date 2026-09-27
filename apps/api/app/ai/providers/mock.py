@@ -331,6 +331,8 @@ class MockAIProvider(AIProvider):
             }
         elif schema and schema.__name__ == "SeoRecommendationsGenerated":
             payload = _seo_recommendations_payload(raw_prompt)
+        elif schema and schema.__name__ == "SeoContentBriefGenerated":
+            payload = _seo_content_brief_payload(raw_prompt)
         elif schema and schema.__name__ == "CompetitorInsight":
             payload = {
                 "observations": ["Competitor names from client profile only — no invented spend."],
@@ -874,4 +876,93 @@ def _seo_recommendations_payload(raw_prompt: str) -> dict[str, Any]:
             "Competitor traffic unavailable",
             "Competitor backlinks unavailable",
         ],
+    }
+
+
+def _seo_content_brief_payload(raw_prompt: str) -> dict[str, Any]:
+    """Build grounded mock SEO content brief from context in the prompt."""
+    import re
+
+    def _first_evidence_id() -> str | None:
+        match = re.search(r'"resolved_evidence":\s*\[\s*\{[^}]*"id":\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else None
+
+    def _first_source() -> str:
+        match = re.search(r'"resolved_evidence":\s*\[\s*\{[^}]*"source":\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else "keyword_opportunity"
+
+    def _primary_keyword() -> str:
+        match = re.search(r'"primary_keyword_candidates":\s*\[\s*"([^"]+)"', raw_prompt)
+        if match:
+            return match.group(1)
+        match = re.search(r'"query":\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else "unavailable"
+
+    def _internal_link() -> str | None:
+        match = re.search(r'"internal_link_candidates":\s*\[\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else None
+
+    def _rec_type() -> str:
+        match = re.search(r'"recommendation":\s*\{[^}]*"type":\s*"([^"]+)"', raw_prompt)
+        if match and match.group(1) in {
+            "content_refresh",
+            "keyword_targeting",
+            "topic_expansion",
+            "content_gap",
+            "search_intent",
+            "competitor_gap",
+        }:
+            return match.group(1)
+        return "keyword_targeting"
+
+    eid = _first_evidence_id()
+    source = _first_source()
+    pk = _primary_keyword()
+    internal = _internal_link()
+    brief_type = _rec_type()
+
+    if not eid:
+        return {"brief": {}, "data_limitations": ["No evidence in prompt"]}
+
+    return {
+        "brief": {
+            "title": f"Content brief: {pk if pk != 'unavailable' else 'SEO opportunity'}",
+            "brief_type": brief_type,
+            "primary_keyword": pk,
+            "secondary_keywords": [pk] if pk != "unavailable" else [],
+            "target_topic": None,
+            "search_intent": {
+                "type": "informational",
+                "confidence": 0.7,
+                "basis": ["Supplied keyword/topic evidence"],
+                "interpretation_note": "AI interpretation — not verified by Google.",
+            },
+            "target_url": None,
+            "content_goal": "Address the grounded SEO recommendation with focused on-site content.",
+            "target_audience": "unavailable",
+            "suggested_content_type": "informational guide",
+            "suggested_angle": "Explain the topic clearly using evidence-backed coverage gaps.",
+            "outline": [
+                {
+                    "heading": "Introduction",
+                    "level": "H2",
+                    "purpose": "Frame the topic and user need.",
+                    "key_points": ["State the primary query intent", "Preview what the reader will learn"],
+                },
+                {
+                    "heading": "Core guidance",
+                    "level": "H2",
+                    "purpose": "Cover the main evidence-backed subject.",
+                    "key_points": ["Address the recommendation action", "Cover missing areas from evidence"],
+                },
+            ],
+            "questions_to_answer": ["What should the reader learn from this page?"],
+            "entities_to_cover": [],
+            "internal_link_targets": [internal] if internal else [],
+            "content_requirements": ["Ground all claims in supplied GrowthOS evidence."],
+            "seo_requirements": ["Use primary keyword naturally in title and headings where appropriate."],
+            "limitations": ["Competitor rankings and traffic are unavailable."],
+            "evidence_refs": [{"source": source, "id": eid, "reason": "Primary evidence from recommendation context"}],
+        },
+        "data_limitations": ["Competitor performance metrics unavailable"],
     }

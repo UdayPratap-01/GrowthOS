@@ -21,6 +21,7 @@ from app.ai.agents.lead_agent import LeadAgent, LeadScoreRequest
 from app.ai.agents.monitoring_agent import MonitoringAgent, MonitoringReport, MonitoringRequest
 from app.ai.agents.optimization_agent import OptimizationAgent, OptimizationPlan, OptimizationRequest
 from app.ai.agents.report_agent import ReportAgent, ReportRequest, WeeklyReportDraft
+from app.ai.agents.seo_content_brief_agent import SeoContentBriefAgent, SeoContentBriefRequest
 from app.ai.agents.seo_recommendation_agent import SeoRecommendationAgent, SeoRecommendationRequest
 from app.ai.agents.strategy_agent import StrategyAgent, StrategyRequest
 from app.ai.agents.variation_agent import VariationAgent, VariationRequest
@@ -38,6 +39,7 @@ from app.schemas.campaign_generation import (
 from app.schemas.client import ClientContext
 from app.schemas.content import ContentGenerateRequest, ContentGenerated
 from app.schemas.lead import LeadScoreExplanation
+from app.schemas.seo_content_brief import SeoContentBriefGenerated
 from app.schemas.seo_recommendation import SeoRecommendationsGenerated
 from app.schemas.strategy import StrategyGenerated
 
@@ -71,11 +73,17 @@ class AIOrchestrator:
         self.variation_agent = VariationAgent(self.provider)
         self.campaign_builder_agent = CampaignBuilderAgent(self.provider)
         self.seo_recommendation_agent = SeoRecommendationAgent(self.provider)
+        self.seo_content_brief_agent = SeoContentBriefAgent(self.provider)
 
     async def generate_seo_recommendations(
         self, context: ClientContext, request: SeoRecommendationRequest
     ) -> SeoRecommendationsGenerated:
         return await self.seo_recommendation_agent.run(context, request)
+
+    async def generate_seo_content_brief(
+        self, context: ClientContext, request: SeoContentBriefRequest
+    ) -> SeoContentBriefGenerated:
+        return await self.seo_content_brief_agent.run(context, request)
 
     async def generate_strategy(self, context: ClientContext, title: str | None = None) -> StrategyGenerated:
         return await self.strategy_agent.run(context, StrategyRequest(title=title))
