@@ -33,6 +33,8 @@ SEO_CRAWL = "seo.crawl"
 SEO_COMPETITOR_CRAWL = "seo.competitor_crawl"
 SEO_MONITOR_SCHEDULER_TICK = "seo.monitor_scheduler_tick"
 SEO_MONITOR_CYCLE = "seo.monitor_cycle"
+SEO_REPORT_SCHEDULER_TICK = "seo.report_scheduler_tick"
+SEO_REPORT_GENERATE = "seo.report.generate"
 
 
 def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
@@ -57,6 +59,8 @@ def build_queue(db: AsyncSession, **kwargs) -> JobQueue:
     queue.register(SEO_COMPETITOR_CRAWL, handlers.handle_seo_competitor_crawl)
     queue.register(SEO_MONITOR_SCHEDULER_TICK, handlers.handle_seo_monitor_scheduler_tick)
     queue.register(SEO_MONITOR_CYCLE, handlers.handle_seo_monitor_cycle)
+    queue.register(SEO_REPORT_SCHEDULER_TICK, handlers.handle_seo_report_scheduler_tick)
+    queue.register(SEO_REPORT_GENERATE, handlers.handle_seo_report_generate)
     return queue
 
 
@@ -80,4 +84,6 @@ def registered_job_types() -> tuple[str, ...]:
         SEO_COMPETITOR_CRAWL,
         SEO_MONITOR_SCHEDULER_TICK,
         SEO_MONITOR_CYCLE,
+        SEO_REPORT_SCHEDULER_TICK,
+        SEO_REPORT_GENERATE,
     )

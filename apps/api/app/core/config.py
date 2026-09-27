@@ -223,6 +223,12 @@ class Settings(BaseSettings):
     seo_monitor_max_orgs_per_cycle: int = 50
     seo_monitor_manual_rate_limit_per_hour: int = 2
 
+    # ---- Scheduled SEO weekly reports (M9.16) -------------------------------
+    seo_weekly_report_scheduler_enabled: bool = False
+    seo_weekly_report_interval_minutes: int = 7 * 24 * 60
+    seo_weekly_report_max_orgs_per_cycle: int = 50
+    seo_report_generate_rate_limit_per_hour: int = 4
+
     # ---- Stale AI action execution recovery --------------------------------
     autonomous_execution_stale_timeout_minutes: int = 30
     autonomous_execution_stale_recovery_batch_size: int = 50

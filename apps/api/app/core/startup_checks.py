@@ -171,6 +171,12 @@ def validate_configuration(settings: Settings | None = None) -> None:
         for msg in validate_seo_monitor_scheduler_settings(settings):
             errors.append(msg)
 
+    from app.jobs.seo_report_scheduler import validate_seo_report_scheduler_settings
+
+    if settings.seo_weekly_report_scheduler_enabled:
+        for msg in validate_seo_report_scheduler_settings(settings):
+            errors.append(msg)
+
     from app.automation.stale_recovery import validate_stale_recovery_settings
 
     for msg in validate_stale_recovery_settings(settings):

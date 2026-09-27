@@ -61,6 +61,7 @@ from app.models.seo_monitoring import (
     SeoMonitoringRun,
     SeoMonitoringSnapshot,
 )
+from app.models.seo_weekly_report import SeoReportConfig, SeoWeeklyReport
 from app.models.organization import Organization, OrganizationMember
 from app.models.strategy import Strategy, StrategyAction
 from app.models.usage import UsageRecord
@@ -120,6 +121,8 @@ __all__ = [
     "SeoMonitoringRun",
     "SeoMonitoringAlert",
     "SeoMonitoringSnapshot",
+    "SeoReportConfig",
+    "SeoWeeklyReport",
     "AIConversation",
     "Report",
     "Integration",

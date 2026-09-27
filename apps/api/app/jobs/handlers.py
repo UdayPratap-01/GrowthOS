@@ -897,3 +897,83 @@ async def handle_seo_monitor_cycle(db: AsyncSession, job: BackgroundJob) -> dict
         details={"result_keys": list(result.keys()), "trigger": (job.payload or {}).get("trigger")},
     )
     return result
+
+
+async def handle_seo_report_scheduler_tick(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Discover reporting-enabled tenants and enqueue weekly report jobs."""
+    from app.core.config import get_settings
+    from app.jobs.seo_report_scheduler import (
+        discover_report_targets,
+        enqueue_weekly_report_for_org,
+        schedule_next_report_tick,
+        scheduled_window_start,
+    )
+    from app.security.audit import write_audit
+
+    settings = get_settings()
+    if not settings.seo_weekly_report_scheduler_enabled:
+        return {"skipped": True, "reason": "SCHEDULER_DISABLED"}
+
+    payload = job.payload or {}
+    now = datetime.now(timezone.utc)
+    window_raw = payload.get("window")
+    if window_raw:
+        try:
+            window = datetime.fromisoformat(str(window_raw))
+            if window.tzinfo is None:
+                window = window.replace(tzinfo=timezone.utc)
+        except ValueError:
+            window = scheduled_window_start(now, settings.seo_weekly_report_interval_minutes)
+    else:
+        window = scheduled_window_start(now, settings.seo_weekly_report_interval_minutes)
+
+    targets = await discover_report_targets(db, max_orgs=settings.seo_weekly_report_max_orgs_per_cycle)
+    enqueued = 0
+    skipped = 0
+    for org, _config in targets:
+        result = await enqueue_weekly_report_for_org(db, organization=org, window_start=window)
+        if result.skipped:
+            skipped += 1
+        elif result.job is not None:
+            enqueued += 1
+
+    await schedule_next_report_tick(db)
+    await write_audit(
+        db,
+        action="seo.report.tick",
+        organization_id=None,
+        user_id=None,
+        resource_type="background_job",
+        resource_id=str(job.id),
+        details={"enqueued": enqueued, "skipped": skipped, "window": window.isoformat()},
+    )
+    return {"enqueued": enqueued, "skipped": skipped, "window": window.isoformat()}
+
+
+async def handle_seo_report_generate(db: AsyncSession, job: BackgroundJob) -> dict:
+    """Generate one SEO weekly report — read-only aggregation only."""
+    from app.security.audit import write_audit
+    from app.services.seo_weekly_report_service import SeoWeeklyReportService
+
+    if job.organization_id is None:
+        raise UnrecoverableJobError("seo.report.generate requires organization_id")
+
+    payload = job.payload or {}
+    report_id_raw = payload.get("report_id")
+    if not report_id_raw:
+        raise UnrecoverableJobError("payload.report_id is required")
+
+    report = await SeoWeeklyReportService(db).generate_report(
+        organization_id=job.organization_id,
+        report_id=UUID(str(report_id_raw)),
+    )
+    await write_audit(
+        db,
+        action="seo.report.generate",
+        organization_id=job.organization_id,
+        user_id=None,
+        resource_type="seo_weekly_report",
+        resource_id=str(report.id),
+        details={"status": report.status, "period_start": str(report.period_start)},
+    )
+    return {"report_id": str(report.id), "status": report.status}
