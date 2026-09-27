@@ -54,6 +54,7 @@ const nav = [
   { href: "/seo/content-gaps", label: "Content Gaps", icon: BarChart3 },
   { href: "/seo/recommendations", label: "SEO Recommendations", icon: Sparkles },
   { href: "/seo/content-briefs", label: "Content Briefs", icon: FileText },
+  { href: "/seo/content", label: "SEO Content", icon: FileText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

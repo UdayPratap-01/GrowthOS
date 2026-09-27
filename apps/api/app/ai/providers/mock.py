@@ -333,6 +333,8 @@ class MockAIProvider(AIProvider):
             payload = _seo_recommendations_payload(raw_prompt)
         elif schema and schema.__name__ == "SeoContentBriefGenerated":
             payload = _seo_content_brief_payload(raw_prompt)
+        elif schema and schema.__name__ == "SeoGeneratedContentOutput":
+            payload = _seo_generated_content_payload(raw_prompt)
         elif schema and schema.__name__ == "CompetitorInsight":
             payload = {
                 "observations": ["Competitor names from client profile only — no invented spend."],
@@ -965,4 +967,60 @@ def _seo_content_brief_payload(raw_prompt: str) -> dict[str, Any]:
             "evidence_refs": [{"source": source, "id": eid, "reason": "Primary evidence from recommendation context"}],
         },
         "data_limitations": ["Competitor performance metrics unavailable"],
+    }
+
+
+def _seo_generated_content_payload(raw_prompt: str) -> dict[str, Any]:
+    """Build grounded mock SEO draft content from brief context in the prompt."""
+    import re
+
+    def _field(name: str, default: str = "") -> str:
+        match = re.search(rf'"{name}":\s*"([^"]*)"', raw_prompt)
+        return match.group(1) if match else default
+
+    def _outline_heading() -> str:
+        match = re.search(r'"outline":\s*\[\s*\{[^}]*"heading":\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else "Core guidance"
+
+    def _internal_link() -> str | None:
+        match = re.search(r'"internal_link_targets":\s*\[\s*"([^"]+)"', raw_prompt)
+        return match.group(1) if match else None
+
+    title = _field("title", "SEO Content Draft")
+    pk = _field("primary_keyword", "unavailable")
+    heading = _outline_heading()
+    internal = _internal_link()
+    intro = f"This draft addresses the content brief for {title}."
+    if pk != "unavailable":
+        intro += f" It focuses on {pk} using evidence-backed guidance."
+
+    sections = [
+        {
+            "heading": heading,
+            "level": "H2",
+            "content": (
+                f"This section follows the brief outline and covers {heading.lower()} with practical guidance."
+                + (f" It references {pk} naturally where appropriate." if pk != "unavailable" else "")
+            ),
+            "subsections": [],
+        }
+    ]
+
+    internal_links = []
+    if internal:
+        internal_links.append({"url": internal, "anchor_text": "Related resource"})
+
+    return {
+        "content": {
+            "title": title[:255],
+            "content_type": "guide",
+            "introduction": intro,
+            "sections": sections,
+            "conclusion": "This draft is a planning artifact and should be reviewed before any publishing workflow.",
+            "meta_title": title[:60],
+            "meta_description": intro[:155],
+            "internal_links": internal_links,
+            "limitations": ["Draft only — not published automatically."],
+        },
+        "data_limitations": ["Competitor metrics unavailable"],
     }

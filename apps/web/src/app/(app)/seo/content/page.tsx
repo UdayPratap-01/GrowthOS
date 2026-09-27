@@ -1,0 +1,255 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { api } from "@/lib/api";
+
+type Brief = {
+  id: string;
+  title: string;
+  brief_type: string;
+  primary_keyword: string;
+  status: string;
+};
+
+type GeneratedContent = {
+  id: string;
+  content_brief_id: string;
+  recommendation_id: string;
+  title: string;
+  slug: string;
+  content_type: string;
+  status: string;
+  content: string;
+  structured_sections: Array<{
+    heading: string;
+    level: string;
+    content: string;
+    subsections?: Array<{ heading: string; level: string; content: string }>;
+  }>;
+  primary_keyword: string;
+  meta_title: string;
+  meta_description: string;
+  internal_link_targets: Array<{ url: string; anchor_text: string }>;
+  evidence_refs: Array<{ source: string; id: string; reason: string }>;
+  limitations: string[];
+  word_count: number;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  algorithm_version: string;
+  created_at?: string;
+};
+
+type Source = {
+  content_id: string;
+  content_brief_id: string;
+  recommendation_id: string;
+  brief_snapshot: Record<string, unknown>;
+  evidence_refs: Array<{ source: string; id: string; reason: string }>;
+  limitations: string[];
+  disclaimer: string;
+};
+
+function safeText(v: unknown): string {
+  if (v == null) return "";
+  return String(v);
+}
+
+export default function SeoContentPage() {
+  const [briefs, setBriefs] = useState<Brief[]>([]);
+  const [contents, setContents] = useState<GeneratedContent[]>([]);
+  const [selectedBriefId, setSelectedBriefId] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const briefRows = await api<Brief[]>("/seo/content-briefs?limit=50");
+      setBriefs(briefRows.filter((b) => b.status !== "archived"));
+      const params = new URLSearchParams({ limit: "50" });
+      if (statusFilter) params.set("status", statusFilter);
+      const rows = await api<GeneratedContent[]>(`/seo/content?${params.toString()}`);
+      setContents(rows);
+      if (rows.length && !selectedId) setSelectedId(rows[0].id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load content");
+    }
+  }, [statusFilter, selectedId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setSource(null);
+      return;
+    }
+    void api<Source>(`/seo/content/${selectedId}/source`)
+      .then(setSource)
+      .catch(() => setSource(null));
+  }, [selectedId]);
+
+  async function generate() {
+    if (!selectedBriefId) {
+      setError("Select a content brief first.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/seo/content/generate", {
+        method: "POST",
+        body: JSON.stringify({ content_brief_id: selectedBriefId }),
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selected = contents.find((c) => c.id === selectedId) ?? null;
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader
+          title="SEO Generated Content"
+          subtitle="AI draft content from M9.8 briefs — review only, not auto-published."
+        />
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-xs text-[var(--muted)]">Source content brief</label>
+            <select
+              className="h-10 min-w-[280px] rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-sm"
+              value={selectedBriefId}
+              onChange={(e) => setSelectedBriefId(e.target.value)}
+            >
+              <option value="">Select brief…</option>
+              {briefs.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {safeText(b.title)} ({safeText(b.primary_keyword)})
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button disabled={busy || !selectedBriefId} onClick={generate}>
+            {busy ? "Generating…" : "Generate content"}
+          </Button>
+          <Button variant="secondary" disabled={busy} onClick={() => void load()}>
+            Refresh
+          </Button>
+        </div>
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          Draft only. M9.9 does not publish or modify live websites.
+        </p>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <div className="mb-3">
+            <select
+              className="h-10 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-sm"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              {["draft", "ready", "archived"].map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          {contents.length === 0 ? (
+            <p className="text-sm text-[var(--muted)]">No generated content yet. Create a brief first.</p>
+          ) : (
+            <div className="space-y-2">
+              {contents.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedId(c.id)}
+                  className={`w-full rounded-lg border p-3 text-left text-sm transition ${
+                    selectedId === c.id
+                      ? "border-[var(--accent)] bg-[var(--surface)]"
+                      : "border-[var(--line)] hover:bg-[var(--surface)]"
+                  }`}
+                >
+                  <div className="font-medium">{safeText(c.title)}</div>
+                  <div className="text-xs text-[var(--muted)]">
+                    {safeText(c.content_type)} · {c.word_count} words · {safeText(c.status)}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <CardHeader title="Content detail" subtitle="AI-generated draft — not fact-checked externally." />
+          {!selected ? (
+            <p className="text-sm text-[var(--muted)]">Select generated content to review.</p>
+          ) : (
+            <div className="space-y-3 text-sm">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-[var(--muted)]">AI-generated content</div>
+                <h3 className="text-lg font-medium">{safeText(selected.title)}</h3>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <div>
+                  <div className="font-medium">Meta title</div>
+                  <p>{safeText(selected.meta_title)}</p>
+                </div>
+                <div>
+                  <div className="font-medium">Meta description</div>
+                  <p className="text-[var(--muted)]">{safeText(selected.meta_description)}</p>
+                </div>
+              </div>
+              <div>
+                <div className="font-medium">Primary keyword</div>
+                <p>{safeText(selected.primary_keyword)}</p>
+              </div>
+              <div>
+                <div className="font-medium">Source brief</div>
+                <p className="font-mono text-xs text-[var(--muted)]">{selected.content_brief_id}</p>
+              </div>
+              <div>
+                <div className="font-medium">Draft body</div>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-[var(--line)] bg-[var(--surface)] p-3 text-xs">
+                  {selected.content}
+                </pre>
+              </div>
+              {source ? (
+                <div>
+                  <div className="font-medium">Source evidence refs</div>
+                  <ul className="mt-1 space-y-1">
+                    {source.evidence_refs.map((ref, i) => (
+                      <li key={i} className="rounded border border-[var(--line)] p-2 text-xs">
+                        <span className="font-mono">{safeText(ref.source)}</span> · {safeText(ref.id)}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-[var(--muted)]">{source.disclaimer}</p>
+                </div>
+              ) : null}
+              <div className="text-xs text-[var(--muted)]">
+                {safeText(selected.algorithm_version)} · {safeText(selected.prompt_version)} · {safeText(selected.provider)} /{" "}
+                {safeText(selected.model)}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}

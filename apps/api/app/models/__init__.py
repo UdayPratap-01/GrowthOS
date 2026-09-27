@@ -49,6 +49,7 @@ from app.models.seo_competitor import (
 )
 from app.models.seo_recommendation import SeoRecommendation, SeoRecommendationRun
 from app.models.seo_content_brief import SeoContentBrief
+from app.models.seo_generated_content import SeoGeneratedContent
 from app.models.search_console import SearchConsoleOpportunity, SearchConsolePerformanceRow, SearchConsoleSync
 from app.models.seo import SeoCrawl, SeoCrawlPage, SeoFinding
 from app.models.organization import Organization, OrganizationMember
@@ -99,6 +100,7 @@ __all__ = [
     "SeoRecommendation",
     "SeoRecommendationRun",
     "SeoContentBrief",
+    "SeoGeneratedContent",
     "AIConversation",
     "Report",
     "Integration",
