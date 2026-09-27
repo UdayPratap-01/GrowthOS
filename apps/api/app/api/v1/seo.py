@@ -13,9 +13,11 @@ from app.core.permissions import Permission, require_permission
 from app.db.session import get_db
 from app.schemas.seo_analysis import SeoFindingCompareOut, SeoFindingOut, SeoFindingSummaryOut
 from app.schemas.seo_crawl import SeoCrawlCreateRequest, SeoCrawlOut, SeoCrawlPageOut
+from app.schemas.seo_dashboard import SeoDashboardOut
 from app.security.limits import seo_crawl_limit
 from app.services.seo_analysis_service import SeoAnalysisService
 from app.services.seo_crawl_service import SeoCrawlService
+from app.services.seo_dashboard_service import SeoDashboardService
 from app.integrations.base import IntegrationConnectionStatus
 from app.integrations.persistence import get_integration_row
 from app.integrations.registry import get_integration
@@ -45,6 +47,15 @@ router.include_router(recommendations_router)
 router.include_router(content_briefs_router)
 router.include_router(seo_content_router)
 router.include_router(seo_actions_router)
+
+
+@router.get("/dashboard", response_model=SeoDashboardOut)
+async def get_seo_dashboard(
+    auth: AuthContext = Depends(get_current_auth),
+    db: AsyncSession = Depends(get_db),
+) -> SeoDashboardOut:
+    """Unified SEO operating dashboard — aggregates persisted M9.1–M9.13 data only."""
+    return await SeoDashboardService(db).get_dashboard(organization_id=auth.organization_id)
 
 
 class SeoAuditRequest(BaseModel):
