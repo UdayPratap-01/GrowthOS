@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import Date, Float, ForeignKey, String, Text
+from sqlalchemy import Date, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,9 @@ from app.models.enums import KeywordOpportunityPriority
 
 class KeywordOpportunity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "keyword_opportunities"
+    __table_args__ = (
+        UniqueConstraint("sync_id", "dedupe_key", name="uq_keyword_opportunities_sync_dedupe"),
+    )
 
     sync_id: Mapped[UUID] = mapped_column(ForeignKey("search_console_syncs.id", ondelete="CASCADE"), index=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)

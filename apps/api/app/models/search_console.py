@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,9 +15,13 @@ from app.models.enums import SearchConsoleOpportunityPriority, SearchConsoleSync
 
 class SearchConsoleSync(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "search_console_syncs"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "sync_key", name="uq_search_console_syncs_org_key"),
+        Index("ix_search_console_syncs_org_status", "organization_id", "status"),
+    )
 
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
-    client_id: Mapped[UUID | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True)
+    client_id: Mapped[UUID | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), nullable=True)
     site_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     sync_key: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[SearchConsoleSyncStatus] = mapped_column(String(16), nullable=False, index=True)
@@ -38,6 +42,9 @@ class SearchConsoleSync(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class SearchConsolePerformanceRow(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "search_console_performance_rows"
+    __table_args__ = (
+        UniqueConstraint("sync_id", "row_key", name="uq_search_console_perf_sync_row"),
+    )
 
     sync_id: Mapped[UUID] = mapped_column(ForeignKey("search_console_syncs.id", ondelete="CASCADE"), index=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
@@ -64,11 +71,14 @@ class SearchConsolePerformanceRow(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class SearchConsoleOpportunity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "search_console_opportunities"
+    __table_args__ = (
+        UniqueConstraint("sync_id", "dedupe_key", name="uq_search_console_opps_sync_dedupe"),
+    )
 
     sync_id: Mapped[UUID] = mapped_column(ForeignKey("search_console_syncs.id", ondelete="CASCADE"), index=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
     site_url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    opportunity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    opportunity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     priority: Mapped[SearchConsoleOpportunityPriority] = mapped_column(String(16), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)

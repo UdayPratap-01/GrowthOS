@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,7 @@ from app.models.enums import SeoCrawlStatus, SeoFindingSeverity, SeoFindingStatu
 
 class SeoCrawl(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_crawls"
+    __table_args__ = (Index("ix_seo_crawls_org_status", "organization_id", "status"),)
 
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[UUID | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True)
@@ -36,6 +37,7 @@ class SeoCrawl(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class SeoCrawlPage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_crawl_pages"
+    __table_args__ = (Index("ix_seo_crawl_pages_crawl_url", "crawl_id", "url", unique=True),)
 
     crawl_id: Mapped[UUID] = mapped_column(ForeignKey("seo_crawls.id", ondelete="CASCADE"), index=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
@@ -55,6 +57,10 @@ class SeoCrawlPage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class SeoFinding(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "seo_findings"
+    __table_args__ = (
+        UniqueConstraint("crawl_id", "dedupe_key", name="uq_seo_findings_crawl_dedupe"),
+        Index("ix_seo_findings_crawl_severity", "crawl_id", "severity"),
+    )
 
     crawl_id: Mapped[UUID] = mapped_column(ForeignKey("seo_crawls.id", ondelete="CASCADE"), index=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
