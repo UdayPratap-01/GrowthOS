@@ -28,6 +28,21 @@ from tests.test_seo_internal_links import _seed_crawl
 from tests.test_seo_onpage_optimizer import _auth_client, _seed_content
 
 
+async def _seed_user(org_id: uuid.UUID) -> uuid.UUID:
+    """Create a real user row — required for PostgreSQL FK on audit_logs.user_id."""
+    async with AsyncSessionLocal() as db:
+        user = User(
+            email=f"seo-action-{uuid.uuid4().hex[:8]}@example.com",
+            hashed_password=hash_password("secret123"),
+            full_name="SEO Action Tester",
+        )
+        db.add(user)
+        await db.flush()
+        db.add(OrganizationMember(organization_id=org_id, user_id=user.id, role=MemberRole.owner))
+        await db.commit()
+        return user.id
+
+
 @pytest.mark.asyncio
 async def test_eligibility_rejects_external_urls():
     org_id, _, content = await _seed_content()
@@ -148,7 +163,7 @@ async def test_payload_immutability_hash():
 @pytest.mark.asyncio
 async def test_approve_and_execute_review_only():
     org_id, _, content = await _seed_content()
-    user_id = uuid.uuid4()
+    user_id = await _seed_user(org_id)
     async with AsyncSessionLocal() as db:
         await _seed_crawl(db, org_id)
         await SeoInternalLinkService(db).generate(
@@ -181,7 +196,7 @@ async def test_approve_and_execute_review_only():
 @pytest.mark.asyncio
 async def test_reject_action():
     org_id, _, content = await _seed_content()
-    user_id = uuid.uuid4()
+    user_id = await _seed_user(org_id)
     async with AsyncSessionLocal() as db:
         await _seed_crawl(db, org_id)
         await SeoInternalLinkService(db).generate(
@@ -255,7 +270,7 @@ async def test_api_propose_list_summary():
 @pytest.mark.asyncio
 async def test_stale_payload_blocks_execution():
     org_id, _, content = await _seed_content()
-    user_id = uuid.uuid4()
+    user_id = await _seed_user(org_id)
     async with AsyncSessionLocal() as db:
         await _seed_crawl(db, org_id)
         await SeoInternalLinkService(db).generate(
