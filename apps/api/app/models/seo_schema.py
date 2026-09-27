@@ -28,7 +28,7 @@ class SeoSchemaArtifact(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     validation_status: Mapped[str] = mapped_column(String(16), default="not_generated", nullable=False, index=True)
     validation_errors: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     validation_warnings: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    eligibility_status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    eligibility_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     eligibility_reasons: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     evidence_refs: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     source_fields: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

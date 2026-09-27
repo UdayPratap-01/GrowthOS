@@ -56,7 +56,7 @@ class Integration(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     provider: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(64), default="not_connected")
     config: Mapped[dict] = mapped_column(JSON, default=dict)
-    secret_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Notification(Base, UUIDPrimaryKeyMixin, TimestampMixin):
