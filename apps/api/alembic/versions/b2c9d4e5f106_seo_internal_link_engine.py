@@ -93,6 +93,12 @@ def upgrade() -> None:
     op.create_index("ix_seo_internal_link_opportunities_content_brief_id", "seo_internal_link_opportunities", ["content_brief_id"])
     op.create_index("ix_seo_internal_link_opportunities_source_url", "seo_internal_link_opportunities", ["source_url"])
     op.create_index("ix_seo_internal_link_opportunities_target_url", "seo_internal_link_opportunities", ["target_url"])
+    op.create_index(
+        "ix_seo_internal_link_opportunities_source_crawl_page_id", "seo_internal_link_opportunities", ["source_crawl_page_id"]
+    )
+    op.create_index(
+        "ix_seo_internal_link_opportunities_target_crawl_page_id", "seo_internal_link_opportunities", ["target_crawl_page_id"]
+    )
     op.create_index("ix_seo_internal_link_opportunities_opportunity_type", "seo_internal_link_opportunities", ["opportunity_type"])
     op.create_index("ix_seo_internal_link_opportunities_relevance_score", "seo_internal_link_opportunities", ["relevance_score"])
     op.create_index("ix_seo_internal_link_opportunities_confidence", "seo_internal_link_opportunities", ["confidence"])
@@ -101,6 +107,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_seo_internal_link_opportunities_target_crawl_page_id", table_name="seo_internal_link_opportunities")
+    op.drop_index("ix_seo_internal_link_opportunities_source_crawl_page_id", table_name="seo_internal_link_opportunities")
     op.drop_index("ix_seo_internal_link_opportunities_dedupe_key", table_name="seo_internal_link_opportunities")
     op.drop_index("ix_seo_internal_link_opportunities_status", table_name="seo_internal_link_opportunities")
     op.drop_index("ix_seo_internal_link_opportunities_confidence", table_name="seo_internal_link_opportunities")
